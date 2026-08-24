@@ -162,14 +162,17 @@ const CATALOG = [
     vendor: 'OpenRouter',
     defaultEnabled: true,
     homepage: 'https://status.openrouter.ai/',
-    // Hard 404s on every standard path; unverified candidates, see Mistral
-    // note. Until one answers, the live models-endpoint probe carries it.
+    // The page runs on OnlineOrNot (native host openrouter.onlineornot.com);
+    // the custom domain 404s every machine path tried so far, so the native
+    // host leads. Unverified candidates -- npm run diagnose reports the
+    // winner. Until one answers, the live models-endpoint probe carries it.
     sources: [
-      { kind: 'incidentio', url: 'https://status.openrouter.ai/proxy/status.openrouter.ai' },
-      { kind: 'feed', url: 'https://status.openrouter.ai/feed.rss' },
-      { kind: 'feed', url: 'https://status.openrouter.ai/rss' },
-      { kind: 'feed', url: 'https://status.openrouter.ai/feed' },
-      { kind: 'instatus', url: 'https://status.openrouter.ai/summary.json' },
+      { kind: 'feed', url: 'https://openrouter.onlineornot.com/rss' },
+      { kind: 'feed', url: 'https://openrouter.onlineornot.com/feed' },
+      { kind: 'feed', url: 'https://openrouter.onlineornot.com/rss.xml' },
+      { kind: 'feed', url: 'https://openrouter.onlineornot.com/feed.xml' },
+      { kind: 'feed', url: 'https://status.openrouter.ai/rss.xml' },
+      { kind: 'feed', url: 'https://status.openrouter.ai/feed.xml' },
     ],
     // The models list is public: a plain 200 is the expected healthy answer.
     probe: { url: 'https://openrouter.ai/api/v1/models', healthyHttp: [200, 400, 401] },
