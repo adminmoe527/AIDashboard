@@ -1,13 +1,17 @@
 # AI Status
 
 A tiny macOS menu bar app (plus a CLI) that watches the health of the AI
-services you depend on — **Claude, OpenAI, DeepSeek, Kimi (Moonshot), and
-Grok (xAI)** — so you find out about degradations *before* you hit the wall,
-not after.
+services you depend on — **Claude, OpenAI, Gemini, DeepSeek, Kimi, Grok,
+Perplexity, Mistral, Groq, Together, OpenRouter, ElevenLabs, Hugging Face,
+GitHub/Copilot, and Cursor** — so you find out about degradations *before*
+you hit the wall, not after.
 
 - Lives in the **menu bar**, no Dock icon, runs quietly in the background
-- Colored dot shows the **worst current status** at a glance
-  (green = all good, yellow = degraded, red = outage, grey = unknown)
+- An **"AI" wordmark** in the menu bar, colored by the **worst current
+  status** (green = all good, yellow = degraded, red = outage, grey = unknown)
+- **Pick your providers**: checkboxes in the settings panel (or right-click
+  the menu bar icon → Providers) — all 15 are on by default, uncheck what you
+  don't use
 - Click the dot for a **popover dashboard** with per-provider detail and
   active incidents; click a tile to open that provider's status page
 - **macOS notifications** when a provider degrades or recovers
@@ -78,13 +82,12 @@ paranoid about **false greens**:
 
 1. **Status page** — sources are tried in priority order until one answers:
 
-   | Provider | Primary source | Fallbacks |
-   |---|---|---|
-   | Claude | `status.claude.com` Statuspage JSON | old `status.anthropic.com`, RSS |
-   | OpenAI | `status.openai.com` Statuspage JSON | Instatus JSON, `feed.rss`, `history.rss` |
-   | DeepSeek | `status.deepseek.com` Statuspage JSON | Instatus JSON, RSS |
-   | Kimi | `status.moonshot.cn` Statuspage JSON | `status.moonshot.ai`, Instatus JSON, RSS |
-   | Grok | `status.x.ai` RSS (`feed.xml`) | JSON endpoints tried first in case xAI unblocks them |
+   Every provider lists its candidate endpoints (Atlassian Statuspage JSON,
+   Instatus JSON, RSS/Atom feeds — Google gets a dedicated reader for its
+   `incidents.json`) in [`src/core/providers.js`](src/core/providers.js).
+   Notable quirks: Claude's page moved to `status.claude.com`; xAI blocks its
+   JSON endpoints so Grok reads RSS; Kimi lives at `status.moonshot.cn`;
+   Gemini status is filtered out of the all-of-Google-Cloud incident list.
 
 2. **Live probe** — a keyless request to the provider's real API host
    (`api.anthropic.com`, `api.openai.com`, …). A `401`/`400`/`405` means the
@@ -158,14 +161,29 @@ from the popover's gear or the tray's right-click menu:
 | Check interval | 60s |
 | Notifications | on |
 | Start at login | off |
+| Providers | all 15 enabled |
 
 ## Development
 
 ```bash
-npm test           # 33 offline tests: parsers, grading, alerting, e2e over localhost
+npm test           # 37 offline tests: parsers, grading, alerting, e2e over localhost
 npm run icons      # regenerate tray + app icons
 npm run pack       # unpacked .app in dist/mac for quick inspection
+node src/cli/check.js --providers=claude,openai   # CLI subset
 ```
+
+## Releasing
+
+Pushing a version tag builds downloadable installers on GitHub's macOS
+runners and attaches them to a GitHub Release — no Node required for the
+people installing them:
+
+```bash
+git tag v1.1.0 && git push origin v1.1.0
+```
+
+The release carries unsigned `.dmg` files for Apple Silicon and Intel; first
+launch needs right-click → Open (see the unsigned-app note above).
 
 ## License
 

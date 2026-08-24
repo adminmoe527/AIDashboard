@@ -11,13 +11,25 @@
  *   node src/cli/check.js --json       machine-readable
  */
 
-const { PROVIDERS } = require('../core/providers');
+const { PROVIDERS, CATALOG, byId } = require('../core/providers');
 const { READERS, runProbe } = require('../core/adapters');
 const { Monitor, checkAll } = require('../core/monitor');
 const { STATUS, LABEL } = require('../core/state');
 
 const args = process.argv.slice(2);
 const has = (f) => args.includes(f);
+
+/** --providers=claude,openai limits check/watch to those catalog ids. */
+function selectedProviders() {
+  const flag = args.find((a) => a.startsWith('--providers='));
+  if (!flag) return PROVIDERS;
+  const chosen = flag
+    .slice('--providers='.length)
+    .split(',')
+    .map((id) => byId(id.trim()))
+    .filter(Boolean);
+  return chosen.length ? chosen : PROVIDERS;
+}
 
 const C = {
   reset: '\x1b[0m', bold: '\x1b[1m', dim: '\x1b[2m',
@@ -81,7 +93,7 @@ async function diagnose() {
   console.log(`\n  ${c('bold', 'Endpoint diagnostic')}\n`);
   let anyFail = false;
 
-  for (const p of PROVIDERS) {
+  for (const p of CATALOG) {
     console.log(`  ${c('bold', p.name)} ${c('grey', '(' + p.vendor + ')')}`);
     let firstWorking = null;
 
@@ -140,7 +152,7 @@ async function main() {
   if (has('--diagnose') || has('-d')) return diagnose();
 
   if (has('--watch') || has('-w')) {
-    const m = new Monitor({ intervalMs: 60_000 });
+    const m = new Monitor({ intervalMs: 60_000, providers: selectedProviders() });
     // Keep a short log of recent transitions; rendering them as part of the
     // table means they survive the screen clear on the next refresh.
     const recentChanges = [];
@@ -167,7 +179,7 @@ async function main() {
   }
 
   const { buildSnapshot } = require('../core/monitor');
-  const results = await checkAll();
+  const results = await checkAll(selectedProviders());
   const snapshot = await buildSnapshot(results);
 
   if (has('--json')) {

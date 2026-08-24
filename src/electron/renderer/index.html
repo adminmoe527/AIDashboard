@@ -149,6 +149,20 @@
     background: var(--panel); color: var(--text);
     border: 1px solid var(--border); border-radius: 6px; padding: 2px 6px;
   }
+  .prov-head { margin-top: 10px; font-weight: 600; }
+  #providers {
+    display: grid;
+    grid-template-columns: 1fr 1fr;
+    gap: 3px 12px;
+    margin-top: 6px;
+    max-height: 170px;
+    overflow-y: auto;
+  }
+  #providers label {
+    display: flex; align-items: center; gap: 6px;
+    font-size: 12px; cursor: pointer; white-space: nowrap;
+    overflow: hidden; text-overflow: ellipsis;
+  }
 </style>
 </head>
 <body>
@@ -181,6 +195,8 @@
       <label for="login">Start at login</label>
       <input type="checkbox" id="login">
     </div>
+    <div class="prov-head">Providers</div>
+    <div id="providers"></div>
   </div>
 
   <footer>
@@ -285,6 +301,15 @@ async function refresh() {
 
 function applySettings(s) {
   if (!s) return;
+  if (Array.isArray(s.catalog)) {
+    $('providers').innerHTML = s.catalog
+      .map(
+        (p) =>
+          '<label><input type="checkbox" data-id="' + esc(p.id) + '"' +
+          (p.enabled ? ' checked' : '') + '> ' + esc(p.name) + '</label>'
+      )
+      .join('');
+  }
   $('interval').value = String(s.intervalMs);
   $('notif').checked = !!s.notifications;
   $('login').checked = !!s.launchAtLogin;
@@ -308,6 +333,16 @@ function wire() {
   $('quit').addEventListener('click', () => window.aistatus.quit());
 
   const push = async (patch) => applySettings(await window.aistatus.setSettings(patch));
+  $('providers').addEventListener('change', () => {
+    const ids = Array.from(document.querySelectorAll('#providers input:checked')).map(
+      (el) => el.dataset.id
+    );
+    if (!ids.length) {
+      loadSettings(); // refuse to uncheck the last provider
+      return;
+    }
+    push({ enabledProviders: ids });
+  });
   $('interval').addEventListener('change', (e) => push({ intervalMs: Number(e.target.value) }));
   $('notif').addEventListener('change', (e) => push({ notifications: e.target.checked }));
   $('login').addEventListener('change', (e) => push({ launchAtLogin: e.target.checked }));

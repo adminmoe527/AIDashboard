@@ -1,0 +1,31 @@
+name: Release
+# Tag a version to publish downloadable builds:
+#   git tag v1.1.0 && git push origin v1.1.0
+# The resulting GitHub Release carries .dmg installers (Apple Silicon + Intel)
+# that users can install without Node or a terminal.
+on:
+  push:
+    tags: ['v*']
+
+jobs:
+  build-mac:
+    runs-on: macos-latest
+    permissions:
+      contents: write
+    env:
+      # No signing certificate in CI; ship unsigned (users right-click > Open).
+      CSC_IDENTITY_AUTO_DISCOVERY: 'false'
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+      - run: npm ci --no-audit --no-fund
+      - run: npm test
+      - run: npm run dist -- --publish never
+      - uses: softprops/action-gh-release@v2
+        with:
+          files: |
+            dist/*.dmg
+            dist/*.zip
+          generate_release_notes: true

@@ -223,6 +223,23 @@ class Monitor extends EventEmitter {
     return this;
   }
 
+  /**
+   * Swap the monitored provider set at runtime (the picker calls this).
+   * State for providers no longer monitored is dropped so a re-enable later
+   * starts fresh instead of comparing against stale history.
+   */
+  setProviders(providers) {
+    this.providers = providers;
+    const ids = new Set(providers.map((p) => p.id));
+    for (const map of [this.lastKnown, this.pendingProbeOutage]) {
+      for (const key of [...map.keys()]) {
+        if (!ids.has(key)) map.delete(key);
+      }
+    }
+    this.wasAllBad = false;
+    return this;
+  }
+
   isAllBad(snapshot) {
     return (
       !snapshot.offline &&

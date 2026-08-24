@@ -100,6 +100,51 @@ function drawDot(size, [r, g, b]) {
   return encodePng(size, size, rgba);
 }
 
+/**
+ * "AI" wordmark as pixel art, colored by status. Hand-drawn bitmap because we
+ * have no font rasterizer -- at menu bar sizes crisp pixels beat blurry text.
+ */
+const AI_GRID = [
+  '.###..###',
+  '#...#..#.',
+  '#...#..#.',
+  '#####..#.',
+  '#...#..#.',
+  '#...#..#.',
+  '#...#.###',
+];
+const AI_W = AI_GRID[0].length;
+const AI_H = AI_GRID.length;
+
+function stampLabel(rgba, size, [r, g, b], scaleFactor) {
+  const s = Math.max(1, Math.floor((size * scaleFactor) / AI_W));
+  const x0 = Math.floor((size - AI_W * s) / 2);
+  const y0 = Math.floor((size - AI_H * s) / 2);
+  for (let gy = 0; gy < AI_H; gy++) {
+    for (let gx = 0; gx < AI_W; gx++) {
+      if (AI_GRID[gy][gx] !== '#') continue;
+      for (let dy = 0; dy < s; dy++) {
+        for (let dx = 0; dx < s; dx++) {
+          const x = x0 + gx * s + dx;
+          const y = y0 + gy * s + dy;
+          if (x < 0 || y < 0 || x >= size || y >= size) continue;
+          const i = (y * size + x) * 4;
+          rgba[i] = r;
+          rgba[i + 1] = g;
+          rgba[i + 2] = b;
+          rgba[i + 3] = 255;
+        }
+      }
+    }
+  }
+}
+
+function drawLabel(size, rgb) {
+  const rgba = Buffer.alloc(size * size * 4);
+  stampLabel(rgba, size, rgb, 0.95);
+  return encodePng(size, size, rgba);
+}
+
 /** App icon: dark rounded square with a green status dot. */
 function drawAppIcon(size) {
   const rgba = Buffer.alloc(size * size * 4);
@@ -110,10 +155,6 @@ function drawAppIcon(size) {
   const half = size / 2;
   const corner = size * 0.22;
   const boxHalf = size * 0.46;
-
-  const dotR = size * 0.2;
-  const dotCx = half;
-  const dotCy = half;
 
   for (let y = 0; y < size; y++) {
     for (let x = 0; x < size; x++) {
@@ -138,21 +179,14 @@ function drawAppIcon(size) {
         r = rr; g = rg2; b = rb;
       }
 
-      // Status dot.
-      const dd = Math.hypot(x + 0.5 - dotCx, y + 0.5 - dotCy);
-      const dotA = clamp01(dotR - dd + 0.5);
-      if (dotA > 0) {
-        r = Math.round(r * (1 - dotA) + dr * dotA);
-        g = Math.round(g * (1 - dotA) + dg * dotA);
-        b = Math.round(b * (1 - dotA) + db * dotA);
-      }
-
       rgba[i] = r;
       rgba[i + 1] = g;
       rgba[i + 2] = b;
       rgba[i + 3] = Math.round(boxA * 255);
     }
   }
+  // Green "AI" wordmark on the plate.
+  stampLabel(rgba, size, [dr, dg, db], 0.62);
   return encodePng(size, size, rgba);
 }
 
@@ -166,6 +200,8 @@ function main() {
     const rgb = hexToRgb(COLOR[status]);
     fs.writeFileSync(path.join(trayDir, `dot-${status}.png`), drawDot(16, rgb));
     fs.writeFileSync(path.join(trayDir, `dot-${status}@2x.png`), drawDot(32, rgb));
+    fs.writeFileSync(path.join(trayDir, `ai-${status}.png`), drawLabel(16, rgb));
+    fs.writeFileSync(path.join(trayDir, `ai-${status}@2x.png`), drawLabel(32, rgb));
   }
 
   fs.writeFileSync(path.join(__dirname, '..', 'assets', 'icon.png'), drawAppIcon(512));

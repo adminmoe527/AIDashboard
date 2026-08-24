@@ -11,7 +11,7 @@ const assert = require('node:assert');
 const http = require('node:http');
 
 const { checkProvider } = require('../src/core/monitor');
-const { readFeed } = require('../src/core/adapters');
+const { readFeed, readGcp } = require('../src/core/adapters');
 const { STATUS } = require('../src/core/state');
 
 /* ------------------------------- fixtures ------------------------------- */
@@ -369,6 +369,49 @@ test('future-dated feed entries are ignored', async () => {
   ]);
   await withServer({ '/feed.xml': xml(body) }, async (base) => {
     const r = await readFeed(`${base}/feed.xml`);
+    assert.equal(r.overall, STATUS.OPERATIONAL);
+  });
+});
+
+/* ----------------------------- gcp incidents ----------------------------- */
+
+test('gcp reader filters to AI products and grades open incidents', async () => {
+  const incidents = [
+    {
+      external_desc: 'Vertex AI elevated error rates',
+      begin: new Date(Date.now() - 2 * 3600 * 1000).toISOString(),
+      status_impact: 'SERVICE_DISRUPTION',
+      affected_products: [{ title: 'Vertex AI' }],
+      most_recent_update: { when: new Date().toISOString(), text: 'Mitigation underway.' },
+      uri: '/incidents/abc',
+    },
+    {
+      external_desc: 'Gemini outage, since resolved',
+      begin: new Date(Date.now() - 30 * 3600 * 1000).toISOString(),
+      end: new Date(Date.now() - 28 * 3600 * 1000).toISOString(),
+      status_impact: 'SERVICE_OUTAGE',
+      affected_products: [{ title: 'Gemini' }],
+    },
+    {
+      external_desc: 'Cloud SQL is on fire',
+      begin: new Date(Date.now() - 1 * 3600 * 1000).toISOString(),
+      status_impact: 'SERVICE_OUTAGE',
+      affected_products: [{ title: 'Cloud SQL' }],
+    },
+  ];
+  await withServer({ '/incidents.json': json(incidents) }, async (base) => {
+    const r = await readGcp(`${base}/incidents.json`);
+    assert.equal(r.ok, true);
+    // The unrelated Cloud SQL outage is ignored; the resolved Gemini one too.
+    assert.equal(r.overall, STATUS.DEGRADED);
+    assert.equal(r.incidents.length, 1);
+    assert.match(r.incidents[0].name, /Vertex AI/);
+  });
+});
+
+test('gcp reader with no open AI incidents is operational', async () => {
+  await withServer({ '/incidents.json': json([]) }, async (base) => {
+    const r = await readGcp(`${base}/incidents.json`);
     assert.equal(r.overall, STATUS.OPERATIONAL);
   });
 });

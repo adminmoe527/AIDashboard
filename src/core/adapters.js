@@ -318,10 +318,70 @@ async function runProbe(probe) {
   });
 }
 
+/* ------------------------------------------------------------------ *
+ * Google Cloud service health (status.cloud.google.com/incidents.json)
+ *
+ * Google publishes one machine-readable incident list for ALL of Google
+ * Cloud rather than a per-product status page, so this reader filters it to
+ * the AI products (Gemini, Vertex AI, AI Studio, Generative Language API).
+ * An incident is open while it has no `end` timestamp.
+ * ------------------------------------------------------------------ */
+const GCP_AI_PRODUCTS = /vertex ai|gemini|generative language|ai studio|ai platform/i;
+const GCP_WINDOW_MS = 7 * 24 * 60 * 60 * 1000;
+
+async function readGcp(url, { now = Date.now() } = {}) {
+  const res = await requestJson(url, { timeout: 10000 });
+  if (!res.ok || !Array.isArray(res.json)) {
+    return { ok: false, error: res.error || `HTTP ${res.status}`, latency: res.latency };
+  }
+
+  const relevant = res.json.filter((i) => {
+    const names =
+      (i.affected_products || []).map((p) => p.title).join(' ') + ' ' + (i.service_name || '');
+    return GCP_AI_PRODUCTS.test(names);
+  });
+
+  const open = relevant.filter((i) => {
+    if (i.end) return false;
+    const begin = Date.parse(i.begin || '');
+    // Guard against zombie entries that were never closed properly.
+    return Number.isFinite(begin) ? now - begin < GCP_WINDOW_MS : true;
+  });
+
+  const impactOf = (i) => String(i.status_impact || '').toUpperCase();
+  const active = open.filter((i) => impactOf(i) !== 'SERVICE_INFORMATION');
+
+  let overall = STATUS.OPERATIONAL;
+  if (active.some((i) => impactOf(i) === 'SERVICE_OUTAGE')) overall = STATUS.OUTAGE;
+  else if (active.length) overall = STATUS.DEGRADED;
+
+  return {
+    ok: true,
+    kind: 'gcp',
+    overall,
+    confidence: active.length ? 'reported' : 'inferred',
+    description: active.length
+      ? `${active.length} open Google incident${active.length > 1 ? 's' : ''} affecting AI products`
+      : 'No open incidents for Gemini / Vertex AI',
+    components: [],
+    incidents: active.slice(0, 5).map((i) => ({
+      name: i.external_desc || 'Google Cloud incident',
+      status: 'open',
+      impact: impactOf(i) === 'SERVICE_OUTAGE' ? 'major' : 'minor',
+      updatedAt: (i.most_recent_update && i.most_recent_update.when) || i.begin || null,
+      url: i.uri ? `https://status.cloud.google.com${i.uri}` : 'https://status.cloud.google.com/',
+      body: i.most_recent_update ? String(i.most_recent_update.text || '').slice(0, 300) : null,
+    })),
+    latency: res.latency,
+    sourceUrl: url,
+  };
+}
+
 const READERS = {
   statuspage: readStatuspage,
+  gcp: readGcp,
   instatus: readInstatus,
   feed: readFeed,
 };
 
-module.exports = { READERS, readStatuspage, readInstatus, readFeed, runProbe, parseFeed, classifyEntry };
+module.exports = { READERS, readStatuspage, readInstatus, readFeed, readGcp, runProbe, parseFeed, classifyEntry };

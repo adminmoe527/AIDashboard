@@ -344,3 +344,46 @@ test('offline snapshots emit no change events', () => {
   );
   assert.equal(c.length, 0);
 });
+
+/* ------------------------------ catalog sanity --------------------------- */
+
+const { CATALOG } = require('../src/core/providers');
+const { READERS } = require('../src/core/adapters');
+const { Monitor } = require('../src/core/monitor');
+
+test('catalog entries are well-formed and every source kind has a reader', () => {
+  const ids = new Set();
+  for (const p of CATALOG) {
+    assert.ok(p.id && !ids.has(p.id), `duplicate or missing id: ${p.id}`);
+    ids.add(p.id);
+    assert.ok(p.name && p.vendor, `${p.id}: name/vendor required`);
+    assert.doesNotThrow(() => new URL(p.homepage), `${p.id}: bad homepage`);
+    assert.ok(p.sources.length >= 1, `${p.id}: needs at least one source`);
+    for (const src of p.sources) {
+      assert.ok(READERS[src.kind], `${p.id}: no reader for kind "${src.kind}"`);
+      assert.doesNotThrow(() => new URL(src.url), `${p.id}: bad source url ${src.url}`);
+    }
+    if (p.probe) {
+      assert.doesNotThrow(() => new URL(p.probe.url), `${p.id}: bad probe url`);
+      assert.ok(
+        !(p.probe.healthyHttp || []).includes(403),
+        `${p.id}: 403 must never be listed as healthy`
+      );
+    }
+  }
+  // The original five are still present.
+  for (const id of ['claude', 'openai', 'deepseek', 'kimi', 'grok']) {
+    assert.ok(ids.has(id), `missing original provider ${id}`);
+  }
+});
+
+test('setProviders prunes per-provider alerting state for removed providers', () => {
+  const m = new Monitor({ providers: [] });
+  m.lastKnown.set('a', STATUS.OPERATIONAL);
+  m.lastKnown.set('b', STATUS.OUTAGE);
+  m.pendingProbeOutage.set('b', 1);
+  m.setProviders([{ id: 'a' }]);
+  assert.ok(m.lastKnown.has('a'));
+  assert.ok(!m.lastKnown.has('b'));
+  assert.ok(!m.pendingProbeOutage.has('b'));
+});

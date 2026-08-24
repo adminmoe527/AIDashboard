@@ -22,7 +22,7 @@ const path = require('path');
 const fs = require('fs');
 
 const { Monitor, DEFAULT_INTERVAL_MS } = require('../core/monitor');
-const { PROVIDERS } = require('../core/providers');
+const { CATALOG } = require('../core/providers');
 const { STATUS, LABEL, rank } = require('../core/state');
 
 let tray = null;
@@ -40,6 +40,8 @@ let lastHiddenAt = 0;
 const DEFAULT_SETTINGS = {
   intervalMs: DEFAULT_INTERVAL_MS,
   notifications: true,
+  // null = the catalog defaults; otherwise an array of provider ids.
+  enabledProviders: null,
 };
 
 function settingsPath() {
@@ -66,11 +68,40 @@ function saveSettings(s) {
 
 let settings = DEFAULT_SETTINGS;
 
+/* --------------------------- provider selection --------------------------- */
+
+function enabledProviderIds() {
+  const valid = new Set(CATALOG.map((p) => p.id));
+  const stored = Array.isArray(settings.enabledProviders)
+    ? settings.enabledProviders.filter((id) => valid.has(id))
+    : null;
+  if (stored && stored.length) return stored;
+  return CATALOG.filter((p) => p.defaultEnabled).map((p) => p.id);
+}
+
+function enabledProviders() {
+  const ids = new Set(enabledProviderIds());
+  return CATALOG.filter((p) => ids.has(p.id));
+}
+
+function setEnabledProviders(ids) {
+  const valid = new Set(CATALOG.map((p) => p.id));
+  const clean = [...new Set(ids)].filter((id) => valid.has(id));
+  if (!clean.length) return; // an empty dashboard is never allowed
+  settings.enabledProviders = clean;
+  saveSettings(settings);
+  if (monitor) {
+    monitor.setProviders(enabledProviders());
+    monitor.refresh();
+  }
+  broadcastSettings();
+}
+
 /* ----------------------- external link allowlist ------------------------- */
 
 // The renderer can only ask us to open provider status pages -- nothing else.
 const ALLOWED_HOSTS = new Set();
-for (const p of PROVIDERS) {
+for (const p of CATALOG) {
   try { ALLOWED_HOSTS.add(new URL(p.homepage).host); } catch {}
   for (const s of p.sources) {
     try { ALLOWED_HOSTS.add(new URL(s.url).host); } catch {}
@@ -91,11 +122,12 @@ function safeOpenExternal(url) {
 /* --------------------------------- tray ---------------------------------- */
 
 function trayIconFor(status) {
-  const file = path.join(__dirname, '..', '..', 'assets', 'tray', `dot-${status}.png`);
+  // The "AI" wordmark, colored by the worst provider status.
+  const file = path.join(__dirname, '..', '..', 'assets', 'tray', `ai-${status}.png`);
   const img = nativeImage.createFromPath(file);
   return img.isEmpty()
     ? nativeImage.createFromPath(
-        path.join(__dirname, '..', '..', 'assets', 'tray', 'dot-unknown.png')
+        path.join(__dirname, '..', '..', 'assets', 'tray', 'ai-unknown.png')
       )
     : img;
 }
@@ -167,6 +199,20 @@ function buildContextMenu(snapshot) {
         },
       })),
     },
+    {
+      label: 'Providers',
+      submenu: CATALOG.map((p) => ({
+        label: `${p.name} (${p.vendor})`,
+        type: 'checkbox',
+        checked: enabledProviderIds().includes(p.id),
+        click: (item) => {
+          const ids = enabledProviderIds();
+          const next = item.checked ? [...ids, p.id] : ids.filter((x) => x !== p.id);
+          if (!next.length) return; // keep at least one monitored
+          setEnabledProviders(next);
+        },
+      })),
+    },
     { type: 'separator' },
     {
       label: 'Quit AI Status',
@@ -190,7 +236,7 @@ function updateTray(snapshot) {
 function createWindow() {
   win = new BrowserWindow({
     width: 380,
-    height: 520,
+    height: 600,
     show: false,
     frame: false,
     resizable: false,
@@ -292,10 +338,17 @@ function notifyChange({ provider, from, to }) {
 /* ---------------------------------- ipc ----------------------------------- */
 
 function settingsPayload() {
+  const ids = new Set(enabledProviderIds());
   return {
     ...settings,
     launchAtLogin: app.getLoginItemSettings().openAtLogin,
     loginItemSupported: app.isPackaged,
+    catalog: CATALOG.map((p) => ({
+      id: p.id,
+      name: p.name,
+      vendor: p.vendor,
+      enabled: ids.has(p.id),
+    })),
   };
 }
 
@@ -328,6 +381,9 @@ function registerIpc() {
       }
       if (typeof patch.launchAtLogin === 'boolean' && app.isPackaged) {
         app.setLoginItemSettings({ openAtLogin: patch.launchAtLogin });
+      }
+      if (Array.isArray(patch.enabledProviders)) {
+        setEnabledProviders(patch.enabledProviders.map(String));
       }
       saveSettings(settings);
       broadcastSettings();
@@ -365,7 +421,7 @@ if (!gotLock) {
     createWindow();
     registerIpc();
 
-    monitor = new Monitor({ intervalMs: settings.intervalMs });
+    monitor = new Monitor({ intervalMs: settings.intervalMs, providers: enabledProviders() });
     monitor.on('update', (snapshot) => {
       updateTray(snapshot);
       if (win && !win.isDestroyed()) {
