@@ -19,4 +19,9 @@ contextBridge.exposeInMainWorld('aistatus', {
     ipcRenderer.on('snapshot', listener);
     return () => ipcRenderer.removeListener('snapshot', listener);
   },
+  onSettings: (cb) => {
+    const listener = (_event, s) => cb(s);
+    ipcRenderer.on('settings', listener);
+    return () => ipcRenderer.removeListener('settings', listener);
+  },
 });

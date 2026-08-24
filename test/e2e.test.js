@@ -11,6 +11,7 @@ const assert = require('node:assert');
 const http = require('node:http');
 
 const { checkProvider } = require('../src/core/monitor');
+const { readFeed } = require('../src/core/adapters');
 const { STATUS } = require('../src/core/state');
 
 /* ------------------------------- fixtures ------------------------------- */
@@ -267,4 +268,107 @@ test('all sources dead + probe connection-refused -> outage', async () => {
       assert.match(r.detail, /unreachable/i);
     }
   );
+});
+
+/* --------------------------- feed window rules --------------------------- */
+
+function rssItems(items) {
+  return (
+    '<?xml version="1.0"?><rss version="2.0"><channel><title>t</title>' +
+    items
+      .map(
+        (i) =>
+          `<item><title>${i.title}</title><description>${i.desc}</description>` +
+          `<pubDate>${i.date.toUTCString()}</pubDate>` +
+          (i.link ? `<link>${i.link}</link>` : '') +
+          '</item>'
+      )
+      .join('') +
+    '</channel></rss>'
+  );
+}
+
+const hoursAgo = (h) => new Date(Date.now() - h * 3600 * 1000);
+
+test('an unresolved incident 20h old is still an open incident', async () => {
+  const body = rssItems([
+    {
+      title: 'Elevated API error rates',
+      desc: 'Investigating - We are seeing elevated error rates.',
+      date: hoursAgo(20),
+      link: 'https://s.example/i/1',
+    },
+  ]);
+  await withServer({ '/feed.xml': xml(body) }, async (base) => {
+    const r = await readFeed(`${base}/feed.xml`);
+    assert.equal(r.ok, true);
+    assert.equal(r.overall, STATUS.DEGRADED);
+    assert.equal(r.incidents.length, 1);
+  });
+});
+
+test('update-per-entry feeds: the newest update of an incident wins', async () => {
+  // Same incident link: an old "Investigating" update and a newer "Resolved".
+  const body = rssItems([
+    {
+      title: 'Elevated API error rates',
+      desc: 'Investigating - We are seeing elevated error rates.',
+      date: hoursAgo(5),
+      link: 'https://s.example/i/1',
+    },
+    {
+      title: 'Elevated API error rates',
+      desc: 'Resolved - This incident has been resolved.',
+      date: hoursAgo(2),
+      link: 'https://s.example/i/1',
+    },
+  ]);
+  await withServer({ '/feed.xml': xml(body) }, async (base) => {
+    const r = await readFeed(`${base}/feed.xml`);
+    assert.equal(r.overall, STATUS.OPERATIONAL);
+    assert.equal(r.incidents.length, 0);
+  });
+});
+
+test('in-progress maintenance grades as maintenance, future maintenance is ignored', async () => {
+  const inProgress = rssItems([
+    {
+      title: 'Scheduled maintenance on the API',
+      desc: 'In progress - Scheduled maintenance is currently in progress.',
+      date: hoursAgo(1),
+      link: 'https://s.example/m/1',
+    },
+  ]);
+  await withServer({ '/feed.xml': xml(inProgress) }, async (base) => {
+    const r = await readFeed(`${base}/feed.xml`);
+    assert.equal(r.overall, STATUS.MAINTENANCE);
+  });
+
+  const announced = rssItems([
+    {
+      title: 'Scheduled maintenance on the API',
+      desc: 'Scheduled - We will perform scheduled maintenance this weekend.',
+      date: hoursAgo(1),
+      link: 'https://s.example/m/2',
+    },
+  ]);
+  await withServer({ '/feed.xml': xml(announced) }, async (base) => {
+    const r = await readFeed(`${base}/feed.xml`);
+    assert.equal(r.overall, STATUS.OPERATIONAL);
+  });
+});
+
+test('future-dated feed entries are ignored', async () => {
+  const body = rssItems([
+    {
+      title: 'Major outage',
+      desc: 'Investigating - everything is down.',
+      date: new Date(Date.now() + 3 * 3600 * 1000),
+      link: 'https://s.example/i/9',
+    },
+  ]);
+  await withServer({ '/feed.xml': xml(body) }, async (base) => {
+    const r = await readFeed(`${base}/feed.xml`);
+    assert.equal(r.overall, STATUS.OPERATIONAL);
+  });
 });

@@ -13,7 +13,7 @@
 const test = require('node:test');
 const assert = require('node:assert');
 
-const { parseFeed } = require('../src/core/adapters');
+const { parseFeed, classifyEntry } = require('../src/core/adapters');
 const { interpretProbe } = require('../src/core/probe-rules');
 const {
   STATUS,
@@ -21,7 +21,7 @@ const {
   fromStatuspageIndicator,
   fromComponentStatus,
 } = require('../src/core/state');
-const { buildSnapshot } = require('../src/core/monitor');
+const { buildSnapshot, detectChanges } = require('../src/core/monitor');
 
 /* ---------------------------- status mapping ---------------------------- */
 
@@ -134,14 +134,36 @@ test('parseFeed returns nothing for an HTML error page', () => {
 
 /* --------------------------- offline behaviour -------------------------- */
 
-test('total failure while offline reports unknown, never outage', async () => {
+test('disabling the connectivity check never invents an offline state', async () => {
   const results = [
     { id: 'a', status: STATUS.OUTAGE, detail: 'unreachable' },
     { id: 'b', status: STATUS.OUTAGE, detail: 'unreachable' },
   ];
-  // Force the offline path without touching the network.
   const snap = await buildSnapshot(results, { checkConnectivity: false });
-  // With connectivity checking disabled it must NOT invent an offline state.
+  assert.equal(snap.offline, false);
+  assert.equal(snap.overall, STATUS.OUTAGE);
+});
+
+test('all providers failing while offline downgrades everything to unknown', async () => {
+  const results = [
+    { id: 'a', status: STATUS.OUTAGE, detail: 'unreachable' },
+    { id: 'b', status: STATUS.OUTAGE, detail: 'unreachable' },
+  ];
+  const snap = await buildSnapshot(results, { checkConnectivity: async () => false });
+  assert.equal(snap.offline, true);
+  assert.equal(snap.overall, STATUS.UNKNOWN);
+  for (const r of snap.providers) {
+    assert.equal(r.status, STATUS.UNKNOWN);
+    assert.match(r.detail, /no internet/i);
+  }
+});
+
+test('all providers failing while online stays a real outage', async () => {
+  const results = [
+    { id: 'a', status: STATUS.OUTAGE },
+    { id: 'b', status: STATUS.OUTAGE },
+  ];
+  const snap = await buildSnapshot(results, { checkConnectivity: async () => true });
   assert.equal(snap.offline, false);
   assert.equal(snap.overall, STATUS.OUTAGE);
 });
@@ -156,4 +178,169 @@ test('a healthy provider prevents the offline downgrade', async () => {
   // the real outage is preserved.
   assert.equal(snap.offline, false);
   assert.equal(snap.overall, STATUS.OUTAGE);
+});
+
+/* --------------------------- entry classification ------------------------ */
+
+test('newest-update state keyword is authoritative over old recovery text', () => {
+  // Statuspage concatenates updates newest-first; recovery words about an
+  // EARLIER incident deep in the history must not close this one.
+  assert.equal(
+    classifyEntry({
+      title: 'API errors',
+      summary:
+        'Investigating - Error rates are spiking. Update - A separate issue ' +
+        'earlier today has been resolved and the fix has been completed.',
+    }),
+    'open'
+  );
+  assert.equal(
+    classifyEntry({ title: 'API errors', summary: 'Resolved - This incident has been resolved.' }),
+    'resolved'
+  );
+  assert.equal(
+    classifyEntry({ title: 'API errors', summary: 'Monitoring - A fix is being monitored.' }),
+    'open'
+  );
+});
+
+test('maintenance announcements are not incidents', () => {
+  assert.equal(
+    classifyEntry({
+      title: 'Scheduled maintenance for the database tier',
+      summary: 'Scheduled - We will be performing scheduled maintenance this weekend.',
+    }),
+    'scheduled'
+  );
+  assert.equal(
+    classifyEntry({
+      title: 'Scheduled maintenance for the database tier',
+      summary: 'In progress - Scheduled maintenance is currently in progress.',
+    }),
+    'maintenance'
+  );
+  assert.equal(
+    classifyEntry({
+      title: 'Scheduled maintenance for the database tier',
+      summary: 'Completed - The scheduled maintenance has been completed.',
+    }),
+    'resolved'
+  );
+});
+
+test('plain incidents without state prefixes fall back to head-only matching', () => {
+  assert.equal(
+    classifyEntry({ title: 'Elevated latency', summary: 'We are investigating elevated latency.' }),
+    'open'
+  );
+  assert.equal(
+    classifyEntry({ title: 'Elevated latency', summary: 'The issue has been fixed.' }),
+    'resolved'
+  );
+});
+
+/* ---------------------------- change detection --------------------------- */
+
+function snap(providers, offline = false) {
+  return { at: new Date().toISOString(), offline, providers };
+}
+
+test('a transition through unknown still reports the real change', () => {
+  const lastKnown = new Map();
+  const pending = new Map();
+
+  // Cycle 1: healthy, page-confirmed.
+  let c = detectChanges(
+    snap([{ id: 'a', status: STATUS.OPERATIONAL, source: { kind: 'statuspage' } }]),
+    lastKnown, pending
+  );
+  assert.equal(c.length, 0);
+
+  // Cycle 2: status page times out under incident load -> unknown. No event,
+  // but also no forgetting.
+  c = detectChanges(snap([{ id: 'a', status: STATUS.UNKNOWN, source: null }]), lastKnown, pending);
+  assert.equal(c.length, 0);
+
+  // Cycle 3: page is back and reports the outage. The user must hear about it.
+  c = detectChanges(
+    snap([{ id: 'a', status: STATUS.OUTAGE, source: { kind: 'statuspage' } }]),
+    lastKnown, pending
+  );
+  assert.equal(c.length, 1);
+  assert.equal(c[0].from, STATUS.OPERATIONAL);
+  assert.equal(c[0].to, STATUS.OUTAGE);
+});
+
+test('probe-only outage needs two consecutive cycles before it alerts', () => {
+  const lastKnown = new Map();
+  const pending = new Map();
+
+  detectChanges(
+    snap([{ id: 'a', status: STATUS.OPERATIONAL, source: { kind: 'statuspage' } }]),
+    lastKnown, pending
+  );
+
+  // First probe-driven outage cycle: suppressed.
+  let c = detectChanges(
+    snap([{ id: 'a', status: STATUS.OUTAGE, source: null }]),
+    lastKnown, pending
+  );
+  assert.equal(c.length, 0);
+
+  // Second consecutive cycle: now it is real.
+  c = detectChanges(snap([{ id: 'a', status: STATUS.OUTAGE, source: null }]), lastKnown, pending);
+  assert.equal(c.length, 1);
+  assert.equal(c[0].to, STATUS.OUTAGE);
+});
+
+test('a single probe-outage blip between healthy cycles never alerts', () => {
+  const lastKnown = new Map();
+  const pending = new Map();
+
+  detectChanges(
+    snap([{ id: 'a', status: STATUS.OPERATIONAL, source: { kind: 'statuspage' } }]),
+    lastKnown, pending
+  );
+  let c = detectChanges(
+    snap([{ id: 'a', status: STATUS.OUTAGE, source: null }]),
+    lastKnown, pending
+  );
+  assert.equal(c.length, 0);
+  c = detectChanges(
+    snap([{ id: 'a', status: STATUS.OPERATIONAL, source: { kind: 'statuspage' } }]),
+    lastKnown, pending
+  );
+  assert.equal(c.length, 0); // and the recovery is silent too: nothing was announced
+});
+
+test('page-confirmed outage alerts immediately, then recovery alerts once', () => {
+  const lastKnown = new Map();
+  const pending = new Map();
+
+  detectChanges(
+    snap([{ id: 'a', status: STATUS.OPERATIONAL, source: { kind: 'statuspage' } }]),
+    lastKnown, pending
+  );
+  let c = detectChanges(
+    snap([{ id: 'a', status: STATUS.OUTAGE, source: { kind: 'statuspage' } }]),
+    lastKnown, pending
+  );
+  assert.equal(c.length, 1);
+
+  c = detectChanges(
+    snap([{ id: 'a', status: STATUS.OPERATIONAL, source: { kind: 'statuspage' } }]),
+    lastKnown, pending
+  );
+  assert.equal(c.length, 1);
+  assert.equal(c[0].to, STATUS.OPERATIONAL);
+});
+
+test('offline snapshots emit no change events', () => {
+  const lastKnown = new Map([['a', STATUS.OPERATIONAL]]);
+  const pending = new Map();
+  const c = detectChanges(
+    snap([{ id: 'a', status: STATUS.UNKNOWN, source: null }], true),
+    lastKnown, pending
+  );
+  assert.equal(c.length, 0);
 });

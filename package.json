@@ -16,7 +16,7 @@
     "postinstall": "node scripts/gen-icons.js",
     "dist": "npm run icons && electron-builder --mac",
     "pack": "npm run icons && electron-builder --mac --dir",
-    "test": "node --test 'test/**/*.test.js'"
+    "test": "node --test"
   },
   "devDependencies": {
     "electron": "^43.4.1",
@@ -56,5 +56,8 @@
     "dmg": {
       "title": "AI Status"
     }
+  },
+  "engines": {
+    "node": ">=20"
   }
 }

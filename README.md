@@ -17,6 +17,8 @@ not after.
 
 ## Quick start
 
+Requires Node 20+ (tested on 22).
+
 ```bash
 git clone https://github.com/adminmoe527/AIDashboard.git
 cd AIDashboard
@@ -51,7 +53,9 @@ Status** to Applications, and launch it. The app:
   clutter;
 - keeps polling in the background as long as it runs;
 - can start automatically: right-click the menu bar dot → **Start at Login**
-  (or add it in System Settings → General → Login Items).
+  (or add it in System Settings → General → Login Items). This toggle is only
+  available in the installed app — in `npm start` dev mode it would register
+  the bare Electron binary, so it's disabled there.
 
 > **Unsigned app note:** the build is not code-signed, so the first launch
 > needs a right-click → Open → Open (or `xattr -dr com.apple.quarantine
@@ -83,12 +87,27 @@ Rules that keep the signal honest:
 
 - **HTTP 403 is never "healthy"** — corporate proxies, VPNs, and WAFs return
   403 exactly like a real API would, so it grades as *Unknown*, not
-  *Operational*.
+  *Operational*. And an ambiguous probe never overrides a readable status
+  page — a proxied network doesn't grey out perfectly good tiles.
 - **Your wifi dropping is not a provider outage.** If every provider fails at
   once, the app checks its own connectivity against neutral hosts and shows
-  an *offline* banner instead of five fake outages — and suppresses
-  notifications until it's back online.
+  an *offline* banner instead of five fake outages — and if everything fails
+  right after a healthy cycle, it re-checks once before believing it, so a
+  wifi roam that heals mid-cycle can't cause a notification storm.
 - **No reachable source ⇒ *Unknown*, never *Operational*.**
+- **A probe-only outage needs two consecutive failing cycles before it
+  notifies** (a single dropped connection isn't proof — the tile still
+  updates immediately; only the alert waits). Page-confirmed incidents alert
+  on the first cycle.
+- **A blind spot never mutes an alert.** Transitions are tracked against the
+  last *definitive* status, so a status page that times out for one cycle
+  mid-incident still produces an *Operational → Outage* notification when it
+  comes back — never silence.
+- **RSS fallback reads incidents the way status pages write them**: entries
+  are grouped per incident, only the newest update counts (recovery words in
+  older update history can't hide a live incident), unresolved incidents stay
+  open for up to 48h without fresh updates, and in-progress maintenance is
+  *Maintenance*, not an outage.
 
 ## Fixing a broken provider
 
@@ -133,7 +152,7 @@ from the popover's gear or the tray's right-click menu:
 ## Development
 
 ```bash
-npm test           # 19 offline tests: parsers, grading rules, e2e over localhost
+npm test           # 33 offline tests: parsers, grading, alerting, e2e over localhost
 npm run icons      # regenerate tray + app icons
 npm run pack       # unpacked .app in dist/mac for quick inspection
 ```

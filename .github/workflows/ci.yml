@@ -13,5 +13,5 @@ jobs:
         with:
           node-version: 22
       # The test suite is pure Node (no Electron, no network), so no install.
-      - run: node --test 'test/**/*.test.js'
+      - run: npm test
       - run: node scripts/gen-icons.js

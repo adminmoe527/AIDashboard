@@ -6,6 +6,7 @@
 <title>AI Status</title>
 <style>
   :root {
+    color-scheme: light dark;
     --bg: #f5f6f8;
     --panel: #ffffff;
     --text: #1c2128;
@@ -282,11 +283,21 @@ async function refresh() {
   }
 }
 
-async function loadSettings() {
-  const s = await window.aistatus.getSettings();
+function applySettings(s) {
+  if (!s) return;
   $('interval').value = String(s.intervalMs);
   $('notif').checked = !!s.notifications;
   $('login').checked = !!s.launchAtLogin;
+  // In dev builds start-at-login would register the bare Electron binary,
+  // so main disables it there.
+  $('login').disabled = !s.loginItemSupported;
+  $('login').closest('.opt').title = s.loginItemSupported
+    ? ''
+    : 'Available in the installed app only';
+}
+
+async function loadSettings() {
+  applySettings(await window.aistatus.getSettings());
 }
 
 function wire() {
@@ -296,15 +307,10 @@ function wire() {
   });
   $('quit').addEventListener('click', () => window.aistatus.quit());
 
-  $('interval').addEventListener('change', (e) => {
-    window.aistatus.setSettings({ intervalMs: Number(e.target.value) });
-  });
-  $('notif').addEventListener('change', (e) => {
-    window.aistatus.setSettings({ notifications: e.target.checked });
-  });
-  $('login').addEventListener('change', (e) => {
-    window.aistatus.setSettings({ launchAtLogin: e.target.checked });
-  });
+  const push = async (patch) => applySettings(await window.aistatus.setSettings(patch));
+  $('interval').addEventListener('change', (e) => push({ intervalMs: Number(e.target.value) }));
+  $('notif').addEventListener('change', (e) => push({ notifications: e.target.checked }));
+  $('login').addEventListener('change', (e) => push({ launchAtLogin: e.target.checked }));
 
   $('list').addEventListener('click', (e) => {
     const tile = e.target.closest('.tile');
@@ -312,6 +318,9 @@ function wire() {
   });
 
   window.aistatus.onSnapshot(render);
+  // Settings can change from the tray menu while the popover is hidden;
+  // main pushes the fresh values on every change and on window show.
+  window.aistatus.onSettings(applySettings);
   setInterval(tick, 1000);
 }
 

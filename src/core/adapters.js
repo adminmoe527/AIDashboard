@@ -110,11 +110,19 @@ async function readInstatus(url) {
  * RSS / Atom incident feed
  *
  * A feed carries no "everything is fine" record, so it can only ever prove
- * that something IS wrong. We look at recent entries and treat an entry as an
- * open incident unless its text says it was resolved/completed. If the newest
- * entry is old, we report operational with low confidence.
+ * that something IS wrong. Real-world feeds come in two shapes:
+ *   - one item per incident with every update concatenated in the
+ *     description, newest first (Atlassian Statuspage history.rss);
+ *   - one item per update, where updates of the same incident share a link
+ *     (OpenAI's feed.rss, Instatus feeds).
+ * So we group entries by incident link, keep only the newest entry of each
+ * group, and classify that entry alone -- recovery words buried in older
+ * update history must never hide a still-open incident, and an incident is
+ * open until its newest update says otherwise, however old it is (within the
+ * lookback window).
  * ------------------------------------------------------------------ */
-const OPEN_WINDOW_MS = 6 * 60 * 60 * 1000; // 6 hours
+const LOOKBACK_MS = 48 * 60 * 60 * 1000; // how far back an incident can still matter
+const FUTURE_SLOP_MS = 5 * 60 * 1000; // tolerate small clock skew on feed dates
 
 async function readFeed(url, { now = Date.now() } = {}) {
   const res = await request(url, { timeout: 8000, accept: 'application/rss+xml, application/atom+xml, application/xml, text/xml, */*' });
@@ -126,12 +134,30 @@ async function readFeed(url, { now = Date.now() } = {}) {
     return { ok: false, error: 'no entries in feed', latency: res.latency };
   }
 
-  const recent = entries.filter((e) => e.date && now - e.date.getTime() < OPEN_WINDOW_MS);
-  const open = recent.filter((e) => !looksResolved(e));
+  // Newest entry per incident, bounded to the lookback window.
+  const newest = new Map();
+  for (const e of entries) {
+    if (!e.date) continue;
+    const t = e.date.getTime();
+    if (t > now + FUTURE_SLOP_MS || now - t > LOOKBACK_MS) continue;
+    const key = e.link || e.title;
+    const prev = newest.get(key);
+    if (!prev || e.date > prev.date) newest.set(key, e);
+  }
 
+  const open = [];
+  for (const e of newest.values()) {
+    const cls = classifyEntry(e);
+    if (cls === 'resolved' || cls === 'scheduled') continue;
+    open.push({ entry: e, cls });
+  }
+
+  const active = open.filter((o) => o.cls !== 'maintenance');
   let overall;
-  if (open.length) {
-    overall = open.some((e) => looksMajor(e)) ? STATUS.OUTAGE : STATUS.DEGRADED;
+  if (active.length) {
+    overall = active.some((o) => looksMajor(o.entry)) ? STATUS.OUTAGE : STATUS.DEGRADED;
+  } else if (open.length) {
+    overall = STATUS.MAINTENANCE;
   } else {
     overall = STATUS.OPERATIONAL;
   }
@@ -143,13 +169,13 @@ async function readFeed(url, { now = Date.now() } = {}) {
     // A feed is a weaker signal than a component list; say so.
     confidence: open.length ? 'reported' : 'inferred',
     description: open.length
-      ? `${open.length} open incident${open.length > 1 ? 's' : ''} reported in feed`
-      : 'No open incidents in the last 6h',
+      ? `${open.length} open item${open.length > 1 ? 's' : ''} in the incident feed`
+      : 'No open incidents in the feed (last 48h)',
     components: [],
-    incidents: open.map((e) => ({
+    incidents: open.map(({ entry: e, cls }) => ({
       name: e.title,
-      status: 'open',
-      impact: looksMajor(e) ? 'major' : 'minor',
+      status: cls === 'maintenance' ? 'maintenance' : 'open',
+      impact: cls === 'maintenance' ? 'maintenance' : looksMajor(e) ? 'major' : 'minor',
       updatedAt: e.date ? e.date.toISOString() : null,
       url: e.link,
       body: e.summary,
@@ -161,10 +187,47 @@ async function readFeed(url, { now = Date.now() } = {}) {
 
 const RESOLVED_RE = /\b(resolved|completed|recovered|mitigated|back to normal|operating normally|has been fixed)\b/i;
 const MAJOR_RE = /\b(major|critical|outage|unavailable|down|severe)\b/i;
+const MAINT_RE = /\b(scheduled|planned)\s+maintenance\b/i;
 
-function looksResolved(entry) {
-  return RESOLVED_RE.test(`${entry.title} ${entry.summary}`);
+/**
+ * Classify the newest entry of one incident:
+ *   'resolved'    the incident is over
+ *   'scheduled'   a maintenance announcement whose window hasn't started
+ *   'maintenance' maintenance currently in progress
+ *   'open'        a live incident
+ *
+ * Statuspage prefixes each update with its state ("Resolved - ...",
+ * "Investigating - ...") and orders updates newest-first, so a leading state
+ * keyword is authoritative. The fallback scans only the title and the head of
+ * the summary -- the newest update's region -- so recovery language deep in a
+ * concatenated update history cannot mask an open incident.
+ */
+function classifyEntry(entry) {
+  const title = entry.title || '';
+  const summary = entry.summary || '';
+  const maint = MAINT_RE.test(`${title} ${summary}`) || /\bmaintenance\b/i.test(title);
+
+  const lead = summary.match(
+    /^\s*(resolved|completed|investigating|identified|monitoring|in progress|scheduled|verifying|update)\b/i
+  );
+  if (lead) {
+    const k = lead[1].toLowerCase();
+    if (k === 'resolved' || k === 'completed') return 'resolved';
+    if (k === 'scheduled') return maint ? 'scheduled' : 'open';
+    if (maint) return 'maintenance';
+    return 'open';
+  }
+
+  if (maint) {
+    if (/\b(completed|complete)\b/i.test(summary)) return 'resolved';
+    if (/\bin progress\b/i.test(summary)) return 'maintenance';
+    return 'scheduled';
+  }
+
+  const head = `${title} ${summary.slice(0, 200)}`;
+  return RESOLVED_RE.test(head) ? 'resolved' : 'open';
 }
+
 function looksMajor(entry) {
   return MAJOR_RE.test(`${entry.title} ${entry.summary}`);
 }
@@ -188,7 +251,9 @@ function parseFeed(xml) {
     const d = raw ? new Date(raw) : null;
     return {
       title: decode(title),
-      summary: decode(stripHtml(summary)),
+      // Decode entities first, then strip: feeds that entity-encode their
+      // HTML would otherwise keep their tags after decoding.
+      summary: stripHtml(decode(summary)).trim(),
       link: attr(b, 'link', 'href') || tag(b, 'link') || null,
       date: d && !Number.isNaN(d.getTime()) ? d : null,
     };
@@ -239,7 +304,13 @@ function normaliseIncident(i) {
  * ------------------------------------------------------------------ */
 async function runProbe(probe) {
   if (!probe || !probe.url) return null;
-  const r = await reach(probe.url, { timeout: 6000 });
+  let r = await reach(probe.url, { timeout: 6000 });
+  if (r.httpStatus === 0) {
+    // One transient DNS/socket hiccup must not grade a provider as down;
+    // confirm total unreachability with a second attempt.
+    await new Promise((resolve) => setTimeout(resolve, 750));
+    r = await reach(probe.url, { timeout: 6000 });
+  }
   return interpretProbe(r.httpStatus, {
     healthyHttp: probe.healthyHttp,
     latency: r.latency,
@@ -253,4 +324,4 @@ const READERS = {
   feed: readFeed,
 };
 
-module.exports = { READERS, readStatuspage, readInstatus, readFeed, runProbe, parseFeed };
+module.exports = { READERS, readStatuspage, readInstatus, readFeed, runProbe, parseFeed, classifyEntry };

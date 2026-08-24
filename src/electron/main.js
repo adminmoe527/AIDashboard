@@ -29,6 +29,11 @@ let tray = null;
 let win = null;
 let monitor = null;
 let quitting = false;
+// When the popover hides on blur because the user clicked the tray icon, the
+// click event arrives just after the hide -- without this timestamp the
+// toggle would instantly re-show the window, making the tray click unable to
+// dismiss it.
+let lastHiddenAt = 0;
 
 /* ------------------------------- settings -------------------------------- */
 
@@ -127,13 +132,21 @@ function buildContextMenu(snapshot) {
       click: (item) => {
         settings.notifications = item.checked;
         saveSettings(settings);
+        broadcastSettings();
       },
     },
     {
       label: 'Start at Login',
       type: 'checkbox',
+      // In dev (npm start) this would register the bare Electron binary as a
+      // login item, which then launches a useless empty Electron on boot.
+      // Only offer it from the packaged .app.
+      enabled: app.isPackaged,
       checked: app.getLoginItemSettings().openAtLogin,
-      click: (item) => app.setLoginItemSettings({ openAtLogin: item.checked }),
+      click: (item) => {
+        if (app.isPackaged) app.setLoginItemSettings({ openAtLogin: item.checked });
+        broadcastSettings();
+      },
     },
     {
       label: 'Check Every',
@@ -150,6 +163,7 @@ function buildContextMenu(snapshot) {
           settings.intervalMs = ms;
           saveSettings(settings);
           monitor.setPollInterval(ms);
+          broadcastSettings();
         },
       })),
     },
@@ -192,9 +206,16 @@ function createWindow() {
 
   win.loadFile(path.join(__dirname, 'renderer', 'index.html'));
 
+  // Re-sync the settings panel on every show; it may have gone stale while
+  // hidden if settings changed via the tray menu.
+  win.on('show', () => broadcastSettings());
+
   // Popover behaviour: dismiss on blur, never actually close.
   win.on('blur', () => {
-    if (!win.webContents.isDevToolsOpened()) win.hide();
+    if (!win.webContents.isDevToolsOpened()) {
+      lastHiddenAt = Date.now();
+      win.hide();
+    }
   });
   win.on('close', (e) => {
     if (!quitting) {
@@ -237,17 +258,22 @@ function showWindow() {
 
 function toggleWindow() {
   if (!win) return;
-  if (win.isVisible()) win.hide();
-  else showWindow();
+  if (win.isVisible()) {
+    win.hide();
+    return;
+  }
+  // A tray click that blurred (and thereby hid) the window lands here within
+  // a few ms; treat it as the dismissal it was meant to be.
+  if (Date.now() - lastHiddenAt < 300) return;
+  showWindow();
 }
 
 /* ----------------------------- notifications ------------------------------ */
 
 function notifyChange({ provider, from, to }) {
   if (!settings.notifications) return;
-  // Unknown transitions are usually connectivity noise, not provider news.
-  if (from === STATUS.UNKNOWN || to === STATUS.UNKNOWN) return;
-
+  // The monitor only emits definitive transitions (never to or from
+  // unknown, probe-only outages debounced), so every event here is real news.
   const worsened = rank(to) > rank(from);
   const recovered = to === STATUS.OPERATIONAL;
   if (!worsened && !recovered) return;
@@ -265,15 +291,28 @@ function notifyChange({ provider, from, to }) {
 
 /* ---------------------------------- ipc ----------------------------------- */
 
+function settingsPayload() {
+  return {
+    ...settings,
+    launchAtLogin: app.getLoginItemSettings().openAtLogin,
+    loginItemSupported: app.isPackaged,
+  };
+}
+
+// Settings can change from two places (tray menu and popover panel); push
+// every change to the renderer so the panel never shows stale values.
+function broadcastSettings() {
+  if (win && !win.isDestroyed()) {
+    win.webContents.send('settings', settingsPayload());
+  }
+}
+
 function registerIpc() {
   ipcMain.handle('snapshot:get', () => monitor.snapshot);
   ipcMain.handle('history:get', () => monitor.history.toArray());
   ipcMain.handle('refresh', () => monitor.refresh());
   ipcMain.handle('open-url', (_e, url) => safeOpenExternal(String(url)));
-  ipcMain.handle('settings:get', () => ({
-    ...settings,
-    launchAtLogin: app.getLoginItemSettings().openAtLogin,
-  }));
+  ipcMain.handle('settings:get', () => settingsPayload());
   ipcMain.handle('settings:set', (_e, patch) => {
     if (patch && typeof patch === 'object') {
       if (typeof patch.notifications === 'boolean') {
@@ -287,15 +326,13 @@ function registerIpc() {
         settings.intervalMs = patch.intervalMs;
         monitor.setPollInterval(settings.intervalMs);
       }
-      if (typeof patch.launchAtLogin === 'boolean') {
+      if (typeof patch.launchAtLogin === 'boolean' && app.isPackaged) {
         app.setLoginItemSettings({ openAtLogin: patch.launchAtLogin });
       }
       saveSettings(settings);
+      broadcastSettings();
     }
-    return {
-      ...settings,
-      launchAtLogin: app.getLoginItemSettings().openAtLogin,
-    };
+    return settingsPayload();
   });
   ipcMain.handle('quit', () => {
     quitting = true;
