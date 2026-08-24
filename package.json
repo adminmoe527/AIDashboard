@@ -1,0 +1,60 @@
+{
+  "name": "ai-status-dashboard",
+  "productName": "AI Status",
+  "version": "1.0.0",
+  "description": "Real-time menu bar dashboard for Claude, OpenAI, DeepSeek, Kimi and Grok service health.",
+  "main": "src/electron/main.js",
+  "author": "adminmoe527",
+  "license": "MIT",
+  "private": true,
+  "scripts": {
+    "start": "electron .",
+    "check": "node src/cli/check.js",
+    "diagnose": "node src/cli/check.js --diagnose",
+    "watch": "node src/cli/check.js --watch",
+    "icons": "node scripts/gen-icons.js",
+    "postinstall": "node scripts/gen-icons.js",
+    "dist": "npm run icons && electron-builder --mac",
+    "pack": "npm run icons && electron-builder --mac --dir",
+    "test": "node --test 'test/**/*.test.js'"
+  },
+  "devDependencies": {
+    "electron": "^43.4.1",
+    "electron-builder": "^26.15.3"
+  },
+  "build": {
+    "appId": "com.adminmoe527.aistatus",
+    "productName": "AI Status",
+    "files": [
+      "src/**/*",
+      "assets/**/*",
+      "!**/*.map"
+    ],
+    "mac": {
+      "category": "public.app-category.developer-tools",
+      "target": [
+        {
+          "target": "dmg",
+          "arch": [
+            "arm64",
+            "x64"
+          ]
+        },
+        {
+          "target": "zip",
+          "arch": [
+            "arm64",
+            "x64"
+          ]
+        }
+      ],
+      "icon": "assets/icon.png",
+      "extendInfo": {
+        "LSUIElement": true
+      }
+    },
+    "dmg": {
+      "title": "AI Status"
+    }
+  }
+}

@@ -1,0 +1,270 @@
+'use strict';
+
+/**
+ * End-to-end tests over a local HTTP server that serves real payload shapes
+ * (Statuspage v2, Instatus, RSS). Exercises the full path the app uses:
+ * source fallback order, probe reconciliation, and degraded/outage grading.
+ */
+
+const test = require('node:test');
+const assert = require('node:assert');
+const http = require('node:http');
+
+const { checkProvider } = require('../src/core/monitor');
+const { STATUS } = require('../src/core/state');
+
+/* ------------------------------- fixtures ------------------------------- */
+
+const SP_GREEN = {
+  page: { id: 'x', name: 'Example' },
+  status: { indicator: 'none', description: 'All Systems Operational' },
+  components: [
+    { name: 'API', status: 'operational' },
+    { name: 'Chat', status: 'operational' },
+  ],
+  incidents: [],
+  scheduled_maintenances: [],
+};
+
+const SP_MINOR = {
+  page: { id: 'x', name: 'Example' },
+  status: { indicator: 'minor', description: 'Partially Degraded Service' },
+  components: [
+    { name: 'API', status: 'degraded_performance' },
+    { name: 'Chat', status: 'operational' },
+  ],
+  incidents: [
+    {
+      name: 'Elevated error rates on the API',
+      status: 'investigating',
+      impact: 'minor',
+      updated_at: new Date().toISOString(),
+      shortlink: 'https://stspg.io/abc',
+      incident_updates: [{ body: '<p>We are investigating.</p>' }],
+    },
+  ],
+  scheduled_maintenances: [],
+};
+
+const INSTATUS_ISSUES = {
+  page: { name: 'Example', url: 'https://example.dev', status: 'HASISSUES' },
+  activeIncidents: [
+    {
+      name: 'API returning 5xx',
+      status: 'INVESTIGATING',
+      impact: 'MAJOROUTAGE',
+      updated_at: new Date().toISOString(),
+      url: 'https://example.dev/incident/1',
+    },
+  ],
+  activeMaintenances: [],
+};
+
+function rssWithOpenIncident() {
+  const recent = new Date(Date.now() - 20 * 60 * 1000).toUTCString();
+  return `<?xml version="1.0"?><rss version="2.0"><channel><title>Example</title>
+    <item>
+      <title>Investigating elevated latency</title>
+      <description>We are investigating elevated latency on the API.</description>
+      <pubDate>${recent}</pubDate>
+      <link>https://status.example.dev/i/1</link>
+    </item>
+  </channel></rss>`;
+}
+
+/* ------------------------------- helpers -------------------------------- */
+
+function serve(routes) {
+  return new Promise((resolve) => {
+    const srv = http.createServer((req, res) => {
+      const route = routes[req.url.split('?')[0]];
+      if (!route) {
+        res.writeHead(404, { 'content-type': 'text/html' });
+        res.end('<html>not found</html>');
+        return;
+      }
+      route(req, res);
+    });
+    srv.listen(0, '127.0.0.1', () => resolve(srv));
+  });
+}
+
+const json = (obj) => (req, res) => {
+  res.writeHead(200, { 'content-type': 'application/json' });
+  res.end(JSON.stringify(obj));
+};
+const xml = (body) => (req, res) => {
+  res.writeHead(200, { 'content-type': 'application/rss+xml' });
+  res.end(body);
+};
+const httpStatus = (code) => (req, res) => {
+  res.writeHead(code);
+  res.end();
+};
+
+function providerAt(base, { sources, probe }) {
+  return {
+    id: 'test',
+    name: 'Test',
+    vendor: 'Test',
+    homepage: base,
+    sources,
+    probe,
+    keyComponents: ['api'],
+  };
+}
+
+async function withServer(routes, fn) {
+  const srv = await serve(routes);
+  const base = `http://127.0.0.1:${srv.address().port}`;
+  try {
+    return await fn(base);
+  } finally {
+    srv.close();
+  }
+}
+
+/* --------------------------------- tests -------------------------------- */
+
+test('healthy statuspage + healthy probe -> operational', async () => {
+  await withServer(
+    { '/summary.json': json(SP_GREEN), '/probe': httpStatus(401) },
+    async (base) => {
+      const r = await checkProvider(
+        providerAt(base, {
+          sources: [{ kind: 'statuspage', url: `${base}/summary.json` }],
+          probe: { url: `${base}/probe`, healthyHttp: [400, 401, 405] },
+        })
+      );
+      assert.equal(r.status, STATUS.OPERATIONAL);
+      assert.equal(r.source.kind, 'statuspage');
+      assert.equal(r.components.length, 2);
+    }
+  );
+});
+
+test('minor statuspage incident -> degraded with incident details', async () => {
+  await withServer(
+    { '/summary.json': json(SP_MINOR), '/probe': httpStatus(401) },
+    async (base) => {
+      const r = await checkProvider(
+        providerAt(base, {
+          sources: [{ kind: 'statuspage', url: `${base}/summary.json` }],
+          probe: { url: `${base}/probe`, healthyHttp: [400, 401, 405] },
+        })
+      );
+      assert.equal(r.status, STATUS.DEGRADED);
+      assert.equal(r.incidents.length, 1);
+      assert.match(r.incidents[0].name, /Elevated error rates/);
+      // HTML stripped from the incident update body.
+      assert.ok(!r.incidents[0].body.includes('<p>'));
+    }
+  );
+});
+
+test('instatus payload with an active major incident -> graded from page status', async () => {
+  await withServer(
+    { '/summary.json': json(INSTATUS_ISSUES), '/probe': httpStatus(401) },
+    async (base) => {
+      const r = await checkProvider(
+        providerAt(base, {
+          sources: [{ kind: 'instatus', url: `${base}/summary.json` }],
+          probe: { url: `${base}/probe`, healthyHttp: [400, 401, 405] },
+        })
+      );
+      assert.equal(r.status, STATUS.DEGRADED); // page says HASISSUES
+      assert.equal(r.incidents.length, 1);
+      assert.equal(r.source.kind, 'instatus');
+    }
+  );
+});
+
+test('dead JSON source falls through to the RSS feed', async () => {
+  await withServer(
+    {
+      // no /summary.json route -> 404 HTML
+      '/feed.xml': xml(rssWithOpenIncident()),
+      '/probe': httpStatus(401),
+    },
+    async (base) => {
+      const r = await checkProvider(
+        providerAt(base, {
+          sources: [
+            { kind: 'statuspage', url: `${base}/summary.json` },
+            { kind: 'feed', url: `${base}/feed.xml` },
+          ],
+          probe: { url: `${base}/probe`, healthyHttp: [400, 401, 405] },
+        })
+      );
+      assert.equal(r.source.kind, 'feed');
+      assert.equal(r.status, STATUS.DEGRADED);
+      assert.equal(r.attempts[0].ok, false);
+      assert.equal(r.attempts[1].ok, true);
+    }
+  );
+});
+
+test('green status page but 500ing API host -> probe escalates to outage', async () => {
+  await withServer(
+    { '/summary.json': json(SP_GREEN), '/probe': httpStatus(503) },
+    async (base) => {
+      const r = await checkProvider(
+        providerAt(base, {
+          sources: [{ kind: 'statuspage', url: `${base}/summary.json` }],
+          probe: { url: `${base}/probe`, healthyHttp: [400, 401, 405] },
+        })
+      );
+      assert.equal(r.status, STATUS.OUTAGE);
+      assert.equal(r.probeEscalated, true);
+      assert.match(r.detail, /live probe/);
+    }
+  );
+});
+
+test('degraded page never gets downgraded by a healthy probe', async () => {
+  await withServer(
+    { '/summary.json': json(SP_MINOR), '/probe': httpStatus(200) },
+    async (base) => {
+      const r = await checkProvider(
+        providerAt(base, {
+          sources: [{ kind: 'statuspage', url: `${base}/summary.json` }],
+          probe: { url: `${base}/probe`, healthyHttp: [400, 401, 405] },
+        })
+      );
+      assert.equal(r.status, STATUS.DEGRADED);
+      assert.ok(!r.probeEscalated);
+    }
+  );
+});
+
+test('all sources dead + probe blocked with 403 -> unknown, not outage and not green', async () => {
+  await withServer(
+    { '/probe': httpStatus(403) },
+    async (base) => {
+      const r = await checkProvider(
+        providerAt(base, {
+          sources: [{ kind: 'statuspage', url: `${base}/summary.json` }],
+          probe: { url: `${base}/probe`, healthyHttp: [400, 401, 405] },
+        })
+      );
+      assert.equal(r.status, STATUS.UNKNOWN);
+    }
+  );
+});
+
+test('all sources dead + probe connection-refused -> outage', async () => {
+  // Point the probe at a port nothing listens on.
+  await withServer(
+    {},
+    async (base) => {
+      const r = await checkProvider(
+        providerAt(base, {
+          sources: [{ kind: 'statuspage', url: `${base}/summary.json` }],
+          probe: { url: 'http://127.0.0.1:1/nope', healthyHttp: [400, 401, 405] },
+        })
+      );
+      assert.equal(r.status, STATUS.OUTAGE);
+      assert.match(r.detail, /unreachable/i);
+    }
+  );
+});
