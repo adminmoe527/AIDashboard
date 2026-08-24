@@ -1,11 +1,14 @@
 name: Release
-# Tag a version to publish downloadable builds:
-#   git tag v1.1.0 && git push origin v1.1.0
-# The resulting GitHub Release carries .dmg installers (Apple Silicon + Intel)
-# that users can install without Node or a terminal.
+# Two ways to publish downloadable builds:
+#   - push a version tag:  git tag v1.2.0 && git push origin v1.2.0
+#   - or run this workflow manually (Actions > Release > Run workflow);
+#     it then tags the current commit as v<package.json version> itself.
+# Either way the GitHub Release carries .dmg installers (Apple Silicon +
+# Intel) that users can install without Node or a terminal.
 on:
   push:
     tags: ['v*']
+  workflow_dispatch: {}
 
 jobs:
   build-mac:
@@ -23,8 +26,17 @@ jobs:
       - run: npm ci --no-audit --no-fund
       - run: npm test
       - run: npm run dist -- --publish never
+      - name: Resolve release tag
+        id: tag
+        run: |
+          if [ "${GITHUB_REF_TYPE}" = "tag" ]; then
+            echo "name=${GITHUB_REF_NAME}" >> "$GITHUB_OUTPUT"
+          else
+            echo "name=v$(node -p 'require("./package.json").version')" >> "$GITHUB_OUTPUT"
+          fi
       - uses: softprops/action-gh-release@v2
         with:
+          tag_name: ${{ steps.tag.outputs.name }}
           files: |
             dist/*.dmg
             dist/*.zip
