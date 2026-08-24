@@ -1,0 +1,326 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta http-equiv="Content-Security-Policy" content="default-src 'none'; style-src 'unsafe-inline'; script-src 'unsafe-inline'; img-src data:;">
+<title>AI Status</title>
+<style>
+  :root {
+    --bg: #f5f6f8;
+    --panel: #ffffff;
+    --text: #1c2128;
+    --muted: #667085;
+    --border: #e3e6ea;
+    --hover: #eef0f3;
+    --operational: #2ea043;
+    --degraded: #d29922;
+    --outage: #f85149;
+    --maintenance: #3b82f6;
+    --unknown: #8b949e;
+  }
+  @media (prefers-color-scheme: dark) {
+    :root {
+      --bg: #1c2128;
+      --panel: #22272e;
+      --text: #e6edf3;
+      --muted: #8b949e;
+      --border: #363c44;
+      --hover: #2d333b;
+    }
+  }
+  * { margin: 0; padding: 0; box-sizing: border-box; }
+  html, body { height: 100%; }
+  body {
+    font: 13px/1.45 -apple-system, BlinkMacSystemFont, "Segoe UI", Helvetica, Arial, sans-serif;
+    background: var(--bg);
+    color: var(--text);
+    user-select: none;
+    display: flex;
+    flex-direction: column;
+    overflow: hidden;
+  }
+
+  header {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    padding: 12px 14px 10px;
+  }
+  header .title { font-weight: 600; font-size: 14px; }
+  header .updated { color: var(--muted); font-size: 11px; margin-left: auto; }
+  header button {
+    border: none;
+    background: none;
+    color: var(--muted);
+    font-size: 14px;
+    cursor: pointer;
+    padding: 4px 6px;
+    border-radius: 6px;
+  }
+  header button:hover { background: var(--hover); color: var(--text); }
+  header button.spinning { animation: spin 0.9s linear infinite; }
+  @keyframes spin { to { transform: rotate(360deg); } }
+
+  #banner {
+    display: none;
+    margin: 0 14px 8px;
+    padding: 8px 10px;
+    border-radius: 8px;
+    font-size: 12px;
+    background: rgba(210, 153, 34, 0.12);
+    color: var(--degraded);
+  }
+  #banner.show { display: block; }
+
+  main { flex: 1; overflow-y: auto; padding: 0 10px 8px; }
+
+  .tile {
+    background: var(--panel);
+    border: 1px solid var(--border);
+    border-radius: 10px;
+    padding: 10px 12px;
+    margin: 0 4px 8px;
+    cursor: pointer;
+  }
+  .tile:hover { background: var(--hover); }
+  .tile .row { display: flex; align-items: center; gap: 8px; }
+  .dot {
+    width: 10px; height: 10px; border-radius: 50%;
+    background: var(--unknown);
+    flex: none;
+  }
+  .dot.operational { background: var(--operational); }
+  .dot.degraded { background: var(--degraded); box-shadow: 0 0 6px var(--degraded); }
+  .dot.outage { background: var(--outage); box-shadow: 0 0 6px var(--outage); }
+  .dot.maintenance { background: var(--maintenance); }
+  .name { font-weight: 600; }
+  .vendor { color: var(--muted); font-size: 11px; }
+  .state { margin-left: auto; font-size: 12px; color: var(--muted); }
+  .state.operational { color: var(--operational); }
+  .state.degraded { color: var(--degraded); }
+  .state.outage { color: var(--outage); }
+  .state.maintenance { color: var(--maintenance); }
+  .detail {
+    margin-top: 5px;
+    color: var(--muted);
+    font-size: 12px;
+    display: -webkit-box;
+    -webkit-line-clamp: 2;
+    -webkit-box-orient: vertical;
+    overflow: hidden;
+  }
+  .incident {
+    margin-top: 5px;
+    font-size: 12px;
+    color: var(--degraded);
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
+  }
+  .meta { margin-top: 5px; color: var(--muted); font-size: 10px; }
+
+  footer {
+    border-top: 1px solid var(--border);
+    padding: 8px 14px;
+    display: flex;
+    align-items: center;
+    gap: 10px;
+    font-size: 11px;
+    color: var(--muted);
+  }
+  footer button {
+    border: none; background: none; cursor: pointer;
+    color: var(--muted); font-size: 11px; padding: 3px 6px; border-radius: 5px;
+  }
+  footer button:hover { background: var(--hover); color: var(--text); }
+  footer .quit { margin-left: auto; }
+
+  #settings {
+    display: none;
+    border-top: 1px solid var(--border);
+    padding: 10px 14px;
+    font-size: 12px;
+  }
+  #settings.show { display: block; }
+  #settings .opt { display: flex; align-items: center; gap: 8px; margin: 6px 0; }
+  #settings label { flex: 1; }
+  #settings select {
+    background: var(--panel); color: var(--text);
+    border: 1px solid var(--border); border-radius: 6px; padding: 2px 6px;
+  }
+</style>
+</head>
+<body>
+  <header>
+    <span class="title">AI Status</span>
+    <span class="updated" id="updated">checking&hellip;</span>
+    <button id="refresh" title="Refresh now">&#8635;</button>
+    <button id="gear" title="Settings">&#9881;</button>
+  </header>
+
+  <div id="banner"></div>
+
+  <main id="list"></main>
+
+  <div id="settings">
+    <div class="opt">
+      <label for="interval">Check every</label>
+      <select id="interval">
+        <option value="30000">30 seconds</option>
+        <option value="60000">1 minute</option>
+        <option value="120000">2 minutes</option>
+        <option value="300000">5 minutes</option>
+      </select>
+    </div>
+    <div class="opt">
+      <label for="notif">Notify on status changes</label>
+      <input type="checkbox" id="notif">
+    </div>
+    <div class="opt">
+      <label for="login">Start at login</label>
+      <input type="checkbox" id="login">
+    </div>
+  </div>
+
+  <footer>
+    <span id="overall">&hellip;</span>
+    <button class="quit" id="quit">Quit</button>
+  </footer>
+
+<script>
+'use strict';
+
+const LABELS = {
+  operational: 'Operational',
+  degraded: 'Degraded',
+  outage: 'Outage',
+  maintenance: 'Maintenance',
+  unknown: 'Unknown',
+};
+
+let lastSnapshot = null;
+
+const $ = (id) => document.getElementById(id);
+
+function esc(s) {
+  const d = document.createElement('span');
+  d.textContent = String(s == null ? '' : s);
+  return d.innerHTML;
+}
+
+function ago(iso) {
+  if (!iso) return '';
+  const s = Math.max(0, Math.round((Date.now() - new Date(iso).getTime()) / 1000));
+  if (s < 5) return 'just now';
+  if (s < 60) return s + 's ago';
+  const m = Math.round(s / 60);
+  if (m < 60) return m + 'm ago';
+  return Math.round(m / 60) + 'h ago';
+}
+
+function renderTile(p) {
+  const status = p.status || 'unknown';
+  const incidents = (p.incidents || []).slice(0, 2);
+  const via = p.source ? p.source.kind : 'no source';
+  const probe = p.probe && p.probe.latency != null ? ' &middot; ' + p.probe.latency + 'ms' : '';
+
+  return (
+    '<div class="tile" data-url="' + esc(p.homepage) + '" title="Open status page">' +
+      '<div class="row">' +
+        '<span class="dot ' + esc(status) + '"></span>' +
+        '<span class="name">' + esc(p.name) + '</span>' +
+        '<span class="vendor">' + esc(p.vendor) + '</span>' +
+        '<span class="state ' + esc(status) + '">' + esc(LABELS[status] || status) + '</span>' +
+      '</div>' +
+      (status !== 'operational' && p.detail
+        ? '<div class="detail">' + esc(p.detail) + '</div>'
+        : '') +
+      incidents
+        .map((i) => '<div class="incident">&#9888; ' + esc(i.name) + '</div>')
+        .join('') +
+      '<div class="meta">via ' + esc(via) + probe + '</div>' +
+    '</div>'
+  );
+}
+
+function render(snapshot) {
+  if (!snapshot) return;
+  lastSnapshot = snapshot;
+
+  const banner = $('banner');
+  if (snapshot.offline) {
+    banner.textContent = 'This Mac appears to be offline — provider status is unknown.';
+    banner.classList.add('show');
+  } else {
+    banner.classList.remove('show');
+  }
+
+  $('list').innerHTML = snapshot.providers.map(renderTile).join('');
+
+  const bad = snapshot.providers.filter((p) => p.status !== 'operational');
+  $('overall').textContent = snapshot.offline
+    ? 'Offline'
+    : bad.length === 0
+      ? 'All systems operational'
+      : bad.length + ' provider' + (bad.length > 1 ? 's' : '') + ' with issues';
+
+  tick();
+}
+
+function tick() {
+  if (lastSnapshot) $('updated').textContent = 'updated ' + ago(lastSnapshot.at);
+}
+
+async function refresh() {
+  const btn = $('refresh');
+  btn.classList.add('spinning');
+  try {
+    const snap = await window.aistatus.refresh();
+    if (snap) render(snap);
+  } finally {
+    btn.classList.remove('spinning');
+  }
+}
+
+async function loadSettings() {
+  const s = await window.aistatus.getSettings();
+  $('interval').value = String(s.intervalMs);
+  $('notif').checked = !!s.notifications;
+  $('login').checked = !!s.launchAtLogin;
+}
+
+function wire() {
+  $('refresh').addEventListener('click', refresh);
+  $('gear').addEventListener('click', () => {
+    $('settings').classList.toggle('show');
+  });
+  $('quit').addEventListener('click', () => window.aistatus.quit());
+
+  $('interval').addEventListener('change', (e) => {
+    window.aistatus.setSettings({ intervalMs: Number(e.target.value) });
+  });
+  $('notif').addEventListener('change', (e) => {
+    window.aistatus.setSettings({ notifications: e.target.checked });
+  });
+  $('login').addEventListener('change', (e) => {
+    window.aistatus.setSettings({ launchAtLogin: e.target.checked });
+  });
+
+  $('list').addEventListener('click', (e) => {
+    const tile = e.target.closest('.tile');
+    if (tile && tile.dataset.url) window.aistatus.openUrl(tile.dataset.url);
+  });
+
+  window.aistatus.onSnapshot(render);
+  setInterval(tick, 1000);
+}
+
+(async function init() {
+  wire();
+  await loadSettings();
+  const snap = await window.aistatus.getSnapshot();
+  if (snap) render(snap);
+})();
+</script>
+</body>
+</html>
