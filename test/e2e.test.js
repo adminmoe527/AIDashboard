@@ -11,7 +11,7 @@ const assert = require('node:assert');
 const http = require('node:http');
 
 const { checkProvider } = require('../src/core/monitor');
-const { readFeed, readGcp } = require('../src/core/adapters');
+const { readFeed, readGcp, readIncidentIo } = require('../src/core/adapters');
 const { STATUS } = require('../src/core/state');
 
 /* ------------------------------- fixtures ------------------------------- */
@@ -413,5 +413,36 @@ test('gcp reader with no open AI incidents is operational', async () => {
   await withServer({ '/incidents.json': json([]) }, async (base) => {
     const r = await readGcp(`${base}/incidents.json`);
     assert.equal(r.overall, STATUS.OPERATIONAL);
+  });
+});
+
+/* ------------------------------ incident.io ------------------------------ */
+
+test('incident.io reader grades ongoing incidents and rejects other shapes', async () => {
+  const withIncident = {
+    summary: {
+      affected_components: [{ name: 'API' }],
+      ongoing_incidents: [
+        { name: 'Elevated errors', status: 'investigating', worst_impact: 'degraded_performance' },
+      ],
+    },
+  };
+  await withServer({ '/proxy/x': json(withIncident) }, async (base) => {
+    const r = await readIncidentIo(`${base}/proxy/x`);
+    assert.equal(r.ok, true);
+    assert.equal(r.overall, STATUS.DEGRADED);
+    assert.equal(r.incidents.length, 1);
+  });
+
+  const quiet = { summary: { affected_components: [], ongoing_incidents: [] } };
+  await withServer({ '/proxy/x': json(quiet) }, async (base) => {
+    const r = await readIncidentIo(`${base}/proxy/x`);
+    assert.equal(r.overall, STATUS.OPERATIONAL);
+  });
+
+  // A Statuspage-shaped payload must not be misread as incident.io.
+  await withServer({ '/proxy/x': json(SP_GREEN) }, async (base) => {
+    const r = await readIncidentIo(`${base}/proxy/x`);
+    assert.equal(r.ok, false);
   });
 });

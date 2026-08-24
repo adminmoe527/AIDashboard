@@ -55,7 +55,7 @@ async function checkProvider(provider, { probe = true } = {}) {
       record.detail = `API host unreachable (${probeResult.note})`;
     } else if (probeResult && probeResult.status === STATUS.OPERATIONAL) {
       record.status = STATUS.UNKNOWN;
-      record.detail = 'Status page unavailable; API host is responding';
+      record.detail = 'No readable status page; live API answering normally';
     } else {
       record.status = STATUS.UNKNOWN;
       record.detail = 'No status source reachable';
@@ -197,6 +197,8 @@ class Monitor extends EventEmitter {
     this.lastKnown = new Map();
     this.pendingProbeOutage = new Map();
     this.wasAllBad = false;
+    // id -> { record, at } of the last reading that came from a real source.
+    this.lastGood = new Map();
   }
 
   start() {
@@ -231,13 +233,45 @@ class Monitor extends EventEmitter {
   setProviders(providers) {
     this.providers = providers;
     const ids = new Set(providers.map((p) => p.id));
-    for (const map of [this.lastKnown, this.pendingProbeOutage]) {
+    for (const map of [this.lastKnown, this.pendingProbeOutage, this.lastGood]) {
       for (const key of [...map.keys()]) {
         if (!ids.has(key)) map.delete(key);
       }
     }
     this.wasAllBad = false;
     return this;
+  }
+
+  /**
+   * Some status-page CDNs drop connections intermittently under repeated
+   * polling (DeepSeek's does). When every source fails for one cycle but a
+   * real reading succeeded within the last 15 minutes, reuse it -- marked
+   * stale -- instead of flapping the tile to Unknown. A probe-driven OUTAGE
+   * is never masked this way, and stale readings are never re-cached, so a
+   * page that stays dead ages out to an honest Unknown.
+   */
+  applyStaleFallback(results) {
+    const STALE_TTL_MS = 15 * 60_000;
+    const now = Date.now();
+    return results.map((r) => {
+      if (r.source && !r.stale) {
+        this.lastGood.set(r.id, { record: r, at: now });
+        return r;
+      }
+      const cached = this.lastGood.get(r.id);
+      if (r.status === STATUS.UNKNOWN && cached && now - cached.at < STALE_TTL_MS) {
+        const mins = Math.max(1, Math.round((now - cached.at) / 60_000));
+        return {
+          ...cached.record,
+          checkedAt: r.checkedAt,
+          probe: r.probe,
+          attempts: r.attempts,
+          stale: true,
+          detail: `${cached.record.detail} (cached ${mins}m ago; sources unreachable this cycle)`,
+        };
+      }
+      return r;
+    });
   }
 
   isAllBad(snapshot) {
@@ -252,7 +286,9 @@ class Monitor extends EventEmitter {
     if (this.running) return this.snapshot;
     this.running = true;
     try {
-      let results = await checkAll(this.providers, { probe: this.probe });
+      let results = this.applyStaleFallback(
+        await checkAll(this.providers, { probe: this.probe })
+      );
       let snapshot = await buildSnapshot(results);
 
       // Everything failing at once right after a healthy cycle is far more
@@ -263,7 +299,9 @@ class Monitor extends EventEmitter {
       // once and trust only the second answer. A genuine multi-vendor
       // outage survives the recheck and costs one cycle of extra latency.
       if (this.isAllBad(snapshot) && !this.wasAllBad) {
-        results = await checkAll(this.providers, { probe: this.probe });
+        results = this.applyStaleFallback(
+          await checkAll(this.providers, { probe: this.probe })
+        );
         snapshot = await buildSnapshot(results);
       }
       this.wasAllBad = this.isAllBad(snapshot);

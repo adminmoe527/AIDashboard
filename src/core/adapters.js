@@ -1,6 +1,6 @@
 'use strict';
 
-const { requestJson, request, reach } = require('./fetcher');
+const { requestJson, request, requestWithRetry, reach } = require('./fetcher');
 const { interpretProbe } = require('./probe-rules');
 const {
   STATUS,
@@ -125,7 +125,7 @@ const LOOKBACK_MS = 48 * 60 * 60 * 1000; // how far back an incident can still m
 const FUTURE_SLOP_MS = 5 * 60 * 1000; // tolerate small clock skew on feed dates
 
 async function readFeed(url, { now = Date.now() } = {}) {
-  const res = await request(url, { timeout: 8000, accept: 'application/rss+xml, application/atom+xml, application/xml, text/xml, */*' });
+  const res = await requestWithRetry(url, { timeout: 8000, accept: 'application/rss+xml, application/atom+xml, application/xml, text/xml, */*' });
   if (!res.ok || !res.body) {
     return { ok: false, error: res.error || `HTTP ${res.status}`, latency: res.latency };
   }
@@ -377,11 +377,63 @@ async function readGcp(url, { now = Date.now() } = {}) {
   };
 }
 
+/* ------------------------------------------------------------------ *
+ * incident.io status pages
+ *
+ * Custom-domain incident.io pages serve their data from /proxy/<host>,
+ * shaped { summary: { affected_components: [], ongoing_incidents: [] } }.
+ * Mistral's status page has incident.io-style incident URLs; this reader is
+ * a candidate for it and similar pages -- if the shape doesn't match, it
+ * fails cleanly and the source chain moves on.
+ * ------------------------------------------------------------------ */
+async function readIncidentIo(url) {
+  const res = await requestJson(url, { timeout: 8000 });
+  if (!res.ok || !res.json) {
+    return { ok: false, error: res.error || `HTTP ${res.status}`, latency: res.latency };
+  }
+  const summary = res.json.summary || res.json;
+  const ongoing = summary && summary.ongoing_incidents;
+  const affected = summary && summary.affected_components;
+  if (!Array.isArray(ongoing) && !Array.isArray(affected)) {
+    return { ok: false, error: 'unrecognised incident.io payload', latency: res.latency };
+  }
+
+  const incidents = (ongoing || []).map((i) => ({
+    name: i.name || 'Incident',
+    status: i.status || 'open',
+    impact: i.worst_impact || i.impact || null,
+    updatedAt: i.last_update_at || i.updated_at || null,
+    url: i.url || null,
+    body: i.last_update_message || null,
+  }));
+
+  let overall = STATUS.OPERATIONAL;
+  if (incidents.length) {
+    overall = incidents.some((i) => /hard_down|full_outage|major/i.test(String(i.impact)))
+      ? STATUS.OUTAGE
+      : STATUS.DEGRADED;
+  }
+
+  return {
+    ok: true,
+    kind: 'incidentio',
+    overall,
+    description: incidents.length
+      ? `${incidents.length} ongoing incident${incidents.length > 1 ? 's' : ''}`
+      : 'No ongoing incidents',
+    components: (affected || []).map((c) => ({ name: c.name, status: STATUS.DEGRADED })),
+    incidents,
+    latency: res.latency,
+    sourceUrl: url,
+  };
+}
+
 const READERS = {
   statuspage: readStatuspage,
   gcp: readGcp,
+  incidentio: readIncidentIo,
   instatus: readInstatus,
   feed: readFeed,
 };
 
-module.exports = { READERS, readStatuspage, readInstatus, readFeed, readGcp, runProbe, parseFeed, classifyEntry };
+module.exports = { READERS, readStatuspage, readInstatus, readFeed, readGcp, readIncidentIo, runProbe, parseFeed, classifyEntry };

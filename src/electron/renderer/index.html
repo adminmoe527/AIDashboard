@@ -238,7 +238,7 @@ function ago(iso) {
 function renderTile(p) {
   const status = p.status || 'unknown';
   const incidents = (p.incidents || []).slice(0, 2);
-  const via = p.source ? p.source.kind : 'no source';
+  const via = p.source ? p.source.kind + (p.stale ? ' (cached)' : '') : 'no source';
   const probe = p.probe && p.probe.latency != null ? ' &middot; ' + p.probe.latency + 'ms' : '';
 
   return (
@@ -274,12 +274,20 @@ function render(snapshot) {
 
   $('list').innerHTML = snapshot.providers.map(renderTile).join('');
 
-  const bad = snapshot.providers.filter((p) => p.status !== 'operational');
+  // "Unknown" means we couldn't read a status page, not that something is
+  // wrong -- count it separately so grey tiles don't read as incidents.
+  const issues = snapshot.providers.filter(
+    (p) => p.status === 'degraded' || p.status === 'outage' || p.status === 'maintenance'
+  ).length;
+  const unknown = snapshot.providers.filter((p) => p.status === 'unknown').length;
   $('overall').textContent = snapshot.offline
     ? 'Offline'
-    : bad.length === 0
-      ? 'All systems operational'
-      : bad.length + ' provider' + (bad.length > 1 ? 's' : '') + ' with issues';
+    : issues
+      ? issues + ' provider' + (issues > 1 ? 's' : '') + ' with issues' +
+        (unknown ? ' \u00b7 ' + unknown + ' unknown' : '')
+      : unknown
+        ? 'Operational \u00b7 ' + unknown + ' unknown'
+        : 'All systems operational';
 
   tick();
 }

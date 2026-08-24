@@ -44,9 +44,23 @@ async function request(url, { timeout = 8000, accept = 'application/json' } = {}
   }
 }
 
+/**
+ * request() with one quick retry when the failure was at the connection level
+ * (status 0 without our own timeout firing). CDNs in front of some status
+ * pages (DeepSeek's, notably) drop connections intermittently; a single
+ * retry with a short budget recovers most of those without stalling a cycle.
+ */
+async function requestWithRetry(url, opts = {}) {
+  const first = await request(url, opts);
+  if (first.status !== 0 || (first.error && first.error.startsWith('timeout'))) {
+    return first;
+  }
+  return request(url, { ...opts, timeout: Math.min(opts.timeout || 8000, 4000) });
+}
+
 /** request() + JSON.parse, tolerating HTML error pages. */
 async function requestJson(url, opts) {
-  const res = await request(url, opts);
+  const res = await requestWithRetry(url, opts);
   if (!res.ok) return { ...res, json: null };
   try {
     return { ...res, json: JSON.parse(res.body) };
@@ -95,4 +109,4 @@ async function isOnline({ timeout = 4000 } = {}) {
   return results.some((r) => r.httpStatus >= 200 && r.httpStatus < 400);
 }
 
-module.exports = { request, requestJson, reach, isOnline, USER_AGENT, CONTROL_HOSTS };
+module.exports = { request, requestWithRetry, requestJson, reach, isOnline, USER_AGENT, CONTROL_HOSTS };

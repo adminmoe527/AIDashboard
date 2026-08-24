@@ -387,3 +387,43 @@ test('setProviders prunes per-provider alerting state for removed providers', ()
   assert.ok(!m.lastKnown.has('b'));
   assert.ok(!m.pendingProbeOutage.has('b'));
 });
+
+/* ----------------------------- stale fallback ---------------------------- */
+
+test('a one-cycle source failure reuses the recent good reading, marked stale', () => {
+  const m = new Monitor({ providers: [] });
+  const good = {
+    id: 'a', status: STATUS.OPERATIONAL, detail: 'All good',
+    source: { kind: 'feed' }, components: [], incidents: [],
+  };
+  let out = m.applyStaleFallback([good]);
+  assert.equal(out[0].stale, undefined);
+
+  const failed = {
+    id: 'a', status: STATUS.UNKNOWN, detail: 'No status source reachable',
+    source: null, probe: null, attempts: [],
+  };
+  out = m.applyStaleFallback([failed]);
+  assert.equal(out[0].status, STATUS.OPERATIONAL);
+  assert.equal(out[0].stale, true);
+  assert.match(out[0].detail, /cached/);
+
+  // A stale substitution must never refresh the cache: simulate the TTL
+  // passing and the next failure goes back to an honest Unknown.
+  m.lastGood.get('a').at = Date.now() - 16 * 60_000;
+  out = m.applyStaleFallback([failed]);
+  assert.equal(out[0].status, STATUS.UNKNOWN);
+});
+
+test('a probe-driven outage is never masked by the stale cache', () => {
+  const m = new Monitor({ providers: [] });
+  m.applyStaleFallback([
+    { id: 'a', status: STATUS.OPERATIONAL, detail: 'ok', source: { kind: 'feed' } },
+  ]);
+  const outage = {
+    id: 'a', status: STATUS.OUTAGE, detail: 'API host unreachable', source: null,
+  };
+  const out = m.applyStaleFallback([outage]);
+  assert.equal(out[0].status, STATUS.OUTAGE);
+  assert.ok(!out[0].stale);
+});

@@ -61,11 +61,13 @@ const CATALOG = [
     vendor: 'DeepSeek',
     defaultEnabled: true,
     homepage: 'https://status.deepseek.com/',
+    // Diagnosed 2026-08-24: the JSON endpoints don't exist (404/HTML), but
+    // the RSS/Atom feeds work -- so feeds lead, JSON stays as a hedge.
     sources: [
-      { kind: 'statuspage', url: 'https://status.deepseek.com/api/v2/summary.json' },
-      { kind: 'instatus', url: 'https://status.deepseek.com/summary.json' },
       { kind: 'feed', url: 'https://status.deepseek.com/history.rss' },
       { kind: 'feed', url: 'https://status.deepseek.com/history.atom' },
+      { kind: 'statuspage', url: 'https://status.deepseek.com/api/v2/summary.json' },
+      { kind: 'instatus', url: 'https://status.deepseek.com/summary.json' },
     ],
     probe: { url: 'https://api.deepseek.com/models', healthyHttp: [400, 401, 405] },
   },
@@ -93,10 +95,9 @@ const CATALOG = [
     // only machine-readable source. We still try JSON first in case that
     // changes.
     sources: [
+      { kind: 'feed', url: 'https://status.x.ai/feed.xml' },
       { kind: 'instatus', url: 'https://status.x.ai/summary.json' },
       { kind: 'statuspage', url: 'https://status.x.ai/api/v2/summary.json' },
-      { kind: 'feed', url: 'https://status.x.ai/feed.xml' },
-      { kind: 'feed', url: 'https://status.x.ai/history.rss' },
     ],
     probe: { url: 'https://api.x.ai/v1/models', healthyHttp: [400, 401, 405] },
   },
@@ -121,11 +122,11 @@ const CATALOG = [
     vendor: 'Perplexity',
     defaultEnabled: true,
     homepage: 'https://status.perplexity.com/',
+    // Diagnosed 2026-08-24: Perplexity runs Instatus.
     sources: [
-      { kind: 'statuspage', url: 'https://status.perplexity.com/api/v2/summary.json' },
-      { kind: 'statuspage', url: 'https://status.perplexity.ai/api/v2/summary.json' },
       { kind: 'instatus', url: 'https://status.perplexity.com/summary.json' },
       { kind: 'feed', url: 'https://status.perplexity.com/history.rss' },
+      { kind: 'statuspage', url: 'https://status.perplexity.com/api/v2/summary.json' },
     ],
     probe: { url: 'https://api.perplexity.ai/chat/completions', healthyHttp: [400, 401, 405] },
   },
@@ -161,11 +162,14 @@ const CATALOG = [
     vendor: 'OpenRouter',
     defaultEnabled: true,
     homepage: 'https://status.openrouter.ai/',
+    // Hard 404s on every standard path; unverified candidates, see Mistral
+    // note. Until one answers, the live models-endpoint probe carries it.
     sources: [
+      { kind: 'incidentio', url: 'https://status.openrouter.ai/proxy/status.openrouter.ai' },
+      { kind: 'feed', url: 'https://status.openrouter.ai/feed.rss' },
+      { kind: 'feed', url: 'https://status.openrouter.ai/rss' },
+      { kind: 'feed', url: 'https://status.openrouter.ai/feed' },
       { kind: 'instatus', url: 'https://status.openrouter.ai/summary.json' },
-      { kind: 'statuspage', url: 'https://status.openrouter.ai/api/v2/summary.json' },
-      { kind: 'feed', url: 'https://status.openrouter.ai/feed.xml' },
-      { kind: 'feed', url: 'https://status.openrouter.ai/history.rss' },
     ],
     // The models list is public: a plain 200 is the expected healthy answer.
     probe: { url: 'https://openrouter.ai/api/v1/models', healthyHttp: [200, 400, 401] },
@@ -176,10 +180,15 @@ const CATALOG = [
     vendor: 'Mistral AI',
     defaultEnabled: true,
     homepage: 'https://status.mistral.ai/',
+    // The page serves SPA HTML on Statuspage/Instatus paths; its incident
+    // URLs match incident.io's scheme, so its proxy JSON leads. Unverified
+    // candidates -- npm run diagnose reports which one answers.
     sources: [
-      { kind: 'statuspage', url: 'https://status.mistral.ai/api/v2/summary.json' },
+      { kind: 'incidentio', url: 'https://status.mistral.ai/proxy/status.mistral.ai' },
+      { kind: 'feed', url: 'https://status.mistral.ai/feed.rss' },
+      { kind: 'feed', url: 'https://status.mistral.ai/rss' },
+      { kind: 'feed', url: 'https://status.mistral.ai/feed' },
       { kind: 'instatus', url: 'https://status.mistral.ai/summary.json' },
-      { kind: 'feed', url: 'https://status.mistral.ai/history.rss' },
     ],
     probe: { url: 'https://api.mistral.ai/v1/models', healthyHttp: [400, 401, 405] },
   },
@@ -202,10 +211,13 @@ const CATALOG = [
     vendor: 'Together AI',
     defaultEnabled: true,
     homepage: 'https://status.together.ai/',
+    // SPA HTML on standard paths; unverified candidates, see Mistral note.
     sources: [
-      { kind: 'statuspage', url: 'https://status.together.ai/api/v2/summary.json' },
+      { kind: 'incidentio', url: 'https://status.together.ai/proxy/status.together.ai' },
+      { kind: 'feed', url: 'https://status.together.ai/feed.rss' },
+      { kind: 'feed', url: 'https://status.together.ai/rss' },
+      { kind: 'feed', url: 'https://status.together.ai/feed' },
       { kind: 'instatus', url: 'https://status.together.ai/summary.json' },
-      { kind: 'feed', url: 'https://status.together.ai/history.rss' },
     ],
     probe: { url: 'https://api.together.xyz/v1/models', healthyHttp: [400, 401, 405] },
   },
@@ -220,7 +232,7 @@ const CATALOG = [
       { kind: 'instatus', url: 'https://status.elevenlabs.io/summary.json' },
       { kind: 'feed', url: 'https://status.elevenlabs.io/history.rss' },
     ],
-    probe: { url: 'https://api.elevenlabs.io/v1/models', healthyHttp: [400, 401, 405] },
+    probe: { url: 'https://api.elevenlabs.io/v1/user', healthyHttp: [400, 401, 405] },
   },
   {
     id: 'huggingface',
@@ -228,10 +240,13 @@ const CATALOG = [
     vendor: 'Hugging Face',
     defaultEnabled: true,
     homepage: 'https://status.huggingface.co/',
+    // Custom page serving SPA HTML on standard paths; unverified candidates.
     sources: [
-      { kind: 'statuspage', url: 'https://status.huggingface.co/api/v2/summary.json' },
+      { kind: 'incidentio', url: 'https://status.huggingface.co/proxy/status.huggingface.co' },
+      { kind: 'feed', url: 'https://status.huggingface.co/feed.rss' },
+      { kind: 'feed', url: 'https://status.huggingface.co/rss' },
+      { kind: 'feed', url: 'https://status.huggingface.co/feed' },
       { kind: 'instatus', url: 'https://status.huggingface.co/summary.json' },
-      { kind: 'feed', url: 'https://status.huggingface.co/history.rss' },
     ],
     probe: { url: 'https://huggingface.co/api/models?limit=1', healthyHttp: [200, 400, 401] },
   },
