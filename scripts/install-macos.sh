@@ -2,8 +2,7 @@
 #
 # One-command installer for AI Status on macOS.
 #
-#   git clone -b claude/ai-status-dashboard-sbs9uv \
-#     https://github.com/adminmoe527/AIDashboard.git ~/AIDashboard \
+#   git clone https://github.com/adminmoe527/AIDashboard.git ~/AIDashboard \
 #     && bash ~/AIDashboard/scripts/install-macos.sh
 #
 # Safe to re-run any time: it pulls the latest code, rebuilds, and replaces
@@ -11,7 +10,7 @@
 
 set -euo pipefail
 
-BRANCH="claude/ai-status-dashboard-sbs9uv"
+BRANCH="main"
 APP_NAME="AI Status"
 DEST="/Applications/${APP_NAME}.app"
 

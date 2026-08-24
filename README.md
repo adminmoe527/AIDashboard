@@ -1,5 +1,10 @@
 # AI Status
 
+[![Release](https://img.shields.io/github/v/release/adminmoe527/AIDashboard?label=download)](https://github.com/adminmoe527/AIDashboard/releases/latest)
+[![CI](https://github.com/adminmoe527/AIDashboard/actions/workflows/ci.yml/badge.svg)](https://github.com/adminmoe527/AIDashboard/actions/workflows/ci.yml)
+![Platform](https://img.shields.io/badge/platform-macOS-lightgrey)
+![License](https://img.shields.io/badge/license-MIT-green)
+
 A tiny macOS menu bar app (plus a CLI) that watches the health of the AI
 services you depend on — **Claude, OpenAI, Gemini, DeepSeek, Kimi, Grok,
 Perplexity, Mistral, Groq, Together, OpenRouter, ElevenLabs, Hugging Face,
@@ -19,15 +24,32 @@ you hit the wall, not after.
 - Zero runtime dependencies — the only packages are Electron itself and
   electron-builder for packaging
 
-## Quick start
+<p align="center">
+  <img src="docs/screenshot.png" width="380" alt="The AI Status popover showing provider tiles, with ElevenLabs degraded">
+</p>
 
-Requires Node 20+ (tested on 22).
+## Install
+
+**Easiest — download the app:** grab the `.dmg` for your Mac (Apple Silicon
+or Intel) from the [latest release](https://github.com/adminmoe527/AIDashboard/releases/latest),
+drag **AI Status** to Applications, and launch it. The build is unsigned, so
+the first open needs right-click → Open → Open.
+
+**Or build from source** (needs Node 20+, e.g. `brew install node`):
+
+```bash
+git clone https://github.com/adminmoe527/AIDashboard.git ~/AIDashboard && bash ~/AIDashboard/scripts/install-macos.sh
+```
+
+Re-run that script any time to update to the latest code.
+
+## Quick start for developers
 
 ```bash
 git clone https://github.com/adminmoe527/AIDashboard.git
 cd AIDashboard
 npm install
-npm start          # the dot appears in your menu bar
+npm start          # the "AI" appears in your menu bar
 ```
 
 ### Try it without Electron
@@ -44,24 +66,9 @@ node src/cli/check.js --json   # machine-readable snapshot
 `npm run check` exits `2` when anything is not operational, so you can use it
 in scripts: `npm run check || say "an AI provider is having trouble"`.
 
-## Install it as a real background app
+## As a background app
 
-**One command** (paste into Terminal on your Mac — needs Node 20+, e.g. `brew install node`):
-
-```bash
-git clone -b claude/ai-status-dashboard-sbs9uv https://github.com/adminmoe527/AIDashboard.git ~/AIDashboard && bash ~/AIDashboard/scripts/install-macos.sh
-```
-
-It clones the repo, builds the app, installs it to `/Applications`, clears the
-Gatekeeper quarantine, and launches it. Re-run the same script any time to
-update. Prefer to do it manually?
-
-```bash
-npm run dist
-```
-
-This produces `dist/AI Status-<version>-<arch>.dmg`. Open it, drag **AI
-Status** to Applications, and launch it. The app:
+Once installed, the app:
 
 - runs as a **menu bar accessory** (`LSUIElement`) — no Dock icon, no window
   clutter;
