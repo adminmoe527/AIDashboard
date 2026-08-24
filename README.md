@@ -42,6 +42,16 @@ in scripts: `npm run check || say "an AI provider is having trouble"`.
 
 ## Install it as a real background app
 
+**One command** (paste into Terminal on your Mac — needs Node 20+, e.g. `brew install node`):
+
+```bash
+git clone -b claude/ai-status-dashboard-sbs9uv https://github.com/adminmoe527/AIDashboard.git ~/AIDashboard && bash ~/AIDashboard/scripts/install-macos.sh
+```
+
+It clones the repo, builds the app, installs it to `/Applications`, clears the
+Gatekeeper quarantine, and launches it. Re-run the same script any time to
+update. Prefer to do it manually?
+
 ```bash
 npm run dist
 ```
