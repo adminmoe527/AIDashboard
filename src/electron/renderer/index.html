@@ -73,7 +73,7 @@
   }
   #banner.show { display: block; }
 
-  main { flex: 1; overflow-y: auto; padding: 0 10px 8px; }
+  main { flex: 1; min-height: 0; overflow-y: auto; padding: 0 10px 8px; }
 
   .tile {
     background: var(--panel);
@@ -149,6 +149,20 @@
     background: var(--panel); color: var(--text);
     border: 1px solid var(--border); border-radius: 6px; padding: 2px 6px;
   }
+  .settings-head {
+    display: flex; align-items: center; justify-content: space-between;
+    font-weight: 600; margin-bottom: 6px;
+  }
+  #settingsDone {
+    border: 1px solid var(--border);
+    background: var(--panel);
+    color: var(--text);
+    border-radius: 6px;
+    padding: 3px 12px;
+    font-size: 12px;
+    cursor: pointer;
+  }
+  #settingsDone:hover { background: var(--hover); }
   .prov-head { margin-top: 10px; font-weight: 600; }
   #providers {
     display: grid;
@@ -178,6 +192,10 @@
   <main id="list"></main>
 
   <div id="settings">
+    <div class="settings-head">
+      <span>Settings</span>
+      <button id="settingsDone">Done</button>
+    </div>
     <div class="opt">
       <label for="interval">Check every</label>
       <select id="interval">
@@ -337,6 +355,16 @@ function wire() {
   $('refresh').addEventListener('click', refresh);
   $('gear').addEventListener('click', () => {
     $('settings').classList.toggle('show');
+  });
+  $('settingsDone').addEventListener('click', () => {
+    $('settings').classList.remove('show');
+  });
+  // The popover hides on blur; when it reappears, always start on the status
+  // list -- nobody should ever reopen the app into a stale settings panel.
+  document.addEventListener('visibilitychange', () => {
+    if (document.visibilityState === 'visible') {
+      $('settings').classList.remove('show');
+    }
   });
   $('quit').addEventListener('click', () => window.aistatus.quit());
 
