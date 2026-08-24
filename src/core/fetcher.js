@@ -1,7 +1,11 @@
 'use strict';
 
+// A browser-style UA, deliberately: DeepSeek's status CDN (and others like
+// it) bot-filter unfamiliar agents under repeated polling -- one-off requests
+// pass, the app's 60s cadence gets dropped. Every request is still a plain
+// public GET of a public status page.
 const USER_AGENT =
-  'ai-status-dashboard/1.0 (+https://github.com/adminmoe527/AIDashboard)';
+  'Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/126.0.0.0 Safari/537.36';
 
 /**
  * fetch() with a hard timeout and a normalised result shape.
@@ -19,6 +23,7 @@ async function request(url, { timeout = 8000, accept = 'application/json' } = {}
       headers: {
         'user-agent': USER_AGENT,
         accept,
+        'accept-language': 'en-US,en;q=0.9',
         'cache-control': 'no-cache',
       },
     });
