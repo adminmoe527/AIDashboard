@@ -37,9 +37,18 @@ cd "$REPO"
 
 # ------------------------------------------------------------- update src ----
 say "Updating source (${BRANCH})"
-git fetch origin "$BRANCH" || true
-git checkout "$BRANCH"
-git pull --ff-only origin "$BRANCH" || true
+git fetch origin "$BRANCH" \
+  || fail "Could not fetch the latest code. Check your connection and re-run."
+git checkout "$BRANCH" 2>/dev/null || git checkout -b "$BRANCH" "origin/$BRANCH"
+# Hard-align with the remote. This clone exists only to build the app, so any
+# local edits -- or leftover files from earlier builds (e.g. a package-lock.json
+# that a plain pull refuses to overwrite) -- are discarded rather than letting
+# the script silently rebuild stale code.
+git reset --hard "origin/$BRANCH"
+
+VERSION="$(node -p 'require("./package.json").version')"
+say "Building AI Status v${VERSION} ($(git rev-parse --short HEAD))"
+rm -rf "$REPO/dist"
 
 # ----------------------------------------------------------------- build ----
 say "Installing build dependencies (first run downloads Electron, ~100MB)"
@@ -66,9 +75,11 @@ xattr -dr com.apple.quarantine "$DEST" 2>/dev/null || true
 say "Launching"
 open "$DEST"
 
+INSTALLED="$(defaults read "$DEST/Contents/Info" CFBundleShortVersionString 2>/dev/null || echo "$VERSION")"
 cat <<EOF
 
-  Done. Look for the status dot near your clock in the menu bar.
+  Done. Installed AI Status v${INSTALLED}.
+  Look for the colored "AI" near your clock in the menu bar.
 
     - Click the dot for the dashboard popover
     - Right-click it for settings, including "Start at Login"
